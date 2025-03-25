@@ -1,0 +1,47 @@
+model_config:
+  num_layers : 1   #1 
+  d_model : 512   #512
+  n_heads : 4   #4
+  dim_feedforward : 2048   #2048
+  conv_lat_dim : 120
+  norm_first : False
+  init : False   
+  dropout : 0.05 #??????????????????   0.03
+  wo_ffn : False        # True | False
+  use_gate : False     # True
+  gate_mode : 'GRU'     # No | GRU | Input | Output | Highway | ST
+  separate : True       
+  critic_mode : 'FC'    # FC | Trans | Mamba | LSTM
+  actor_mode : 'LSTM'  # Trans | Diff-Trans | Mamba | FC
+  algo : 'TD3'
+
+
+
+train_config : 
+  algo : 'TD3' # TD3, SAC
+  env_name : "-"      # 
+  eval_delay : 20             # Раз во сколько эпизодов делаем Eval                     
+  context_length : 25          # =1 если у нас актор это MLP
+  replay_buffer_mode : 'RB'  # RB | PRB
+  replay_buffer_size : 1000000  #1000000
+  batch_size : 500
+  steps_per_update : 1 #5    # Раз во сколько шагов в среде обновляемся (1 значит 1 шаг одно обновление по батчу)
+  update_iterations : 1      # Сколько раз семплируем батчи и обновляемся по ним в рамках одного обновления  
+  max_ep_len : 1000000000000
+  lr : 0.0003   #3e-4
+  gamma : 0.8 #0.999
+  soft_tau : 0.01 #0.005  #0.01
+  noise_mode : "Gauss"                   # OU
+  max_episodes : 30000 #30000
+  surrogate_max_sigma : 1
+  surrogate_min_sigma : 0.01
+  surrogate_sigma_decay : 0.999990789702043
+  master_max_sigma : 1 ######################################### 0.2
+  master_min_sigma : 0.01 ######################### 0.01
+  master_sigma_decay : 0.999990789702043 ###################### 0.995
+  actor_delay : 2    # Раз во сколько обновлений обновляем актора
+  critic_pretrain_steps : 0   # Перед тем как начать обновлять актора, можно сначала пообновлять только критика первые  critic_pretrain_steps шагов
+  sac_alpha_autotune : True   # Задаёт линамическое изменение параметра alpha при SAC
+  sac_alpha : 0.21             # Параметр alpha в SAC
+
+

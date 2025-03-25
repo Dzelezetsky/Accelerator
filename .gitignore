@@ -1,0 +1,172 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# Local development settings
+.env
+.env.local
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Documentation
+docs/_build/
+
+*.npz
+*.h5
+*.nn
+*.pth
+*.pt
+*.pyc 
+wandb/
+wandb_config.yaml
+*.gz
+=1.13
+
+# TensorBoard
+logs/
+events.out.tfevents.*
+
+#  Weights & Biases
+wandb/
+*.wandb
+
+# 
+*.ckpt
+*.pth
+*.pt
+*.h5
+*.onnx
+*.pb
+
+# cache
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# envs
+venv/
+.env/
+
+
+
+# compilation and distribution
+__pycache__
+_ext
+*.pyc
+*.so
+build/
+dist/
+*.egg-info/
+
+# ipython/jupyter notebooks
+# *.ipynb
+**/.ipynb_checkpoints/
+
+# Editor temporaries
+*.swn
+*.swo
+*.swp
+*~
+
+
+# MacOS
+*.DS_Store
+
+# Pycharm editor settings
+.idea
+
+# VSCode editor settings
+.vscode
+
+# project-relevant
+imgui.ini
+
+# directories that should be ignored in general
+# but can be excluded explicitly
+/tmp
+/data
+/demos
+/videos
+/examples/benchmarking/videos
+
+# benchmarking
+
+# testing
+.coverage*
+htmlcov/
+
+
+*.mp4
+*.swp
+.python-version
+wandb
+summaries
+*.nn
+*.pt
+wandb-debug.log
+__pycache__
+.ipynb_checkpoints
+.DS_Store
+logs
+
+/cleanrl/runs
+/cleanrl/runs/*
+/cleanrl/runs*/*
+
+**/runs/
+**/runs*/
+
+RLC_RUNS/*
+WORKSHOP_RUNS/*
+WORKSHOP_WEIGHTS/*
+__RLW_MATERIALS/*
+
