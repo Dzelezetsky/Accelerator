@@ -9,7 +9,8 @@ import copy
 #########################################################
 from collections import defaultdict
 
-import pybullet_envs_gymnasium 
+import gym 
+#import pybullet_envs_gymnasium 
 ########################################################
 
 from torch.utils.tensorboard import SummaryWriter
@@ -264,7 +265,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", default="TD3")                  
-    parser.add_argument("--env", default="HalfCheetah-v0")       
+    parser.add_argument("--env", default="HalfCheetah-v4")       
     parser.add_argument("--obs_indices", default=[0,1,2,3,8,9,10,11,12]) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state") 
     parser.add_argument("--use_train_data", default=False)
@@ -273,10 +274,11 @@ if __name__ == "__main__":
     parser.add_argument("--num_envs", default=1, type=int)
     parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--trans_critic", default=False)
+    parser.add_argument("--rb_size", default=500000, type=int)
     parser.add_argument("--separate_trans_critic", default=False)
     parser.add_argument("--start_timesteps", default=25000, type=int)# Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=3e3, type=int)       # How often (time steps) we evaluate
-    parser.add_argument("--max_timesteps", default=1e6, type=int)   # Max time steps to run environment
+    parser.add_argument("--max_timesteps", default=200e3, type=int)   # Max time steps to run environment
     parser.add_argument("--grad_clip", default=100000, type=int)
     parser.add_argument("--expl_noise", default=0.1, type=float)    # было 0.0
     parser.add_argument("--batch_size", default=256, type=int)      # 256
@@ -292,8 +294,15 @@ if __name__ == "__main__":
     with open("MUJOCO/sh_config.yaml") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     
-    config['model_config']['actor_mode'] = 'Trans'
     
+    config['model_config']['actor_mode'] = 'Trans'
+    config['train_config']['replay_buffer_size'] = args.rb_size
+    if args.env == "HalfCheetah-v4":
+        args.obs_indices = [0,1,2,3,8,9,10,11,12]
+    elif args.env == "Ant-v4":
+        args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]    
+    elif args.env == "Hopper-v4":
+        args.obs_indices = [0,1,2,3,4]    
     
     n_l = config['model_config']['num_layers']
     d_m = config['model_config']['d_model']
@@ -301,9 +310,9 @@ if __name__ == "__main__":
     d_f = config['model_config']['dim_feedforward']
     cont = config['train_config']['context_length']
     
-    for RUN in [4]:
-        args.seed = RUN
-        path2run = f"RLC_RUNS/{args.env}/[From_Scratch_ST2_BLT_V]|seed={args.seed}|[{n_l}/{d_m}/{n_h}/{d_f}/{cont}]|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
+    for RUN in [args.seed]:
+        #args.seed = RUN
+        path2run = f"RLC_RUNS/{args.env}/[SMALL_RB_EXP]|RB={args.rb_size}|seed={args.seed}|[{n_l}/{d_m}/{n_h}/{d_f}/{cont}]|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
     
         experiment = SummaryWriter(log_dir=path2run)
     

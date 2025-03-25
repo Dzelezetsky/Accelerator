@@ -2,7 +2,7 @@ model_config:
   num_layers : 1   #1 
   d_model : 512   #512
   n_heads : 4   #4
-  dim_feedforward : 2048   #2048
+  dim_feedforward : 1024   #2048
   conv_lat_dim : 120
   norm_first : False
   init : False   
@@ -21,7 +21,7 @@ train_config :
   algo : 'TD3' # TD3, SAC
   env_name : "-"      # 
   eval_delay : 20             # Раз во сколько эпизодов делаем Eval                     
-  context_length : 25          # =1 если у нас актор это MLP
+  context_length : 10          # =1 если у нас актор это MLP
   replay_buffer_mode : 'RB'  # RB | PRB
   replay_buffer_size : 1000000  #1000000
   batch_size : 500

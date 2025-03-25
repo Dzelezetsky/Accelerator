@@ -14,7 +14,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ##################################
 import gym
 #import gymnasium as gym
-import pybullet_envs_gymnasium 
+#import pybullet_envs_gymnasium 
 ##################################
 
 def mean_padding(tensor, K):
@@ -325,6 +325,8 @@ class TD3(object):
         self.context_length = context_length
         
         if preload_weights==None:
+            print('No preload weights!')
+            print('***INITIALIZING EMPTY MODEL***')
             # self.actor = Actor(state_dim, action_dim, max_action).to(device)
             # self.actor_target = copy.deepcopy(self.actor).to(device)
             # self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
@@ -497,10 +499,7 @@ class TD3(object):
         next_states = next_states.to(device).requires_grad_(True)								#n_e, bs, context, state_dim
 
         self.trans_actor.train()
-        if hasattr(self, 'critic'):
-            self.critic.train()
-        else:
-            self.trans_critic.train()    
+        self.trans_critic.train()    
 
         with torch.no_grad():
             noise = (                                                           #n_e, bs, a_d
@@ -516,50 +515,32 @@ class TD3(object):
                 noise = ( torch.randn_like(next_action) * self.policy_noise ).clamp(-self.noise_clip, self.noise_clip)  
                 next_action = (next_action + noise).clamp(-self.max_action, self.max_action)
             
-            if hasattr(self, 'critic_target'): 
-                target_Q1, target_Q2 = self.critic_target(next_states[:,:,-1,:], next_action) if self.obs_mode == 'state' else self.critic_target(next_states[:,:,-1,:], next_action, img_next_states[:,:,-1,])
-            else:
-                target_Q1, target_Q2 = self.trans_critic_target(next_states, next_action)
+            target_Q1, target_Q2 = self.trans_critic_target(next_states, next_action)
             
             target_Q = torch.min(target_Q1, target_Q2)                                      #target_Q = (n_e, bs, 1)
             target_Q = rewards + (1-dones) * self.discount * target_Q       #target_Q = (n_e, bs, 1) + (n_e, bs, 1) * const * (n_e, bs, 1)
         
-        if hasattr(self, 'critic'):
-            current_Q1, current_Q2 = self.critic(states[:,:,-1,:], actions) if self.obs_mode == 'state' else self.critic(states[:,:,-1,:], actions, img_states[:,:,-1,])  #current_Q1 = (n_e, bs, 1)
-        else:
-            current_Q1, current_Q2 = self.trans_critic(states, actions)
+        current_Q1, current_Q2 = self.trans_critic(states, actions)
 
 
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
         self.experiment.add_scalar('Critic_loss', critic_loss.item(), self.total_it)
 
-        if hasattr(self, 'critic'):
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.grad_clip)
-            critic_grad_norm = sum(p.grad.norm().item() for p in self.critic.parameters() if p.grad is not None)
-        else:
-            self.trans_critic_optimizer.zero_grad()
-            critic_loss.backward()
-            torch.nn.utils.clip_grad_value_(self.trans_critic.parameters(), self.grad_clip)
-            critic_grad_norm = sum(p.grad.norm().item() for p in self.trans_critic.parameters() if p.grad is not None)
+        self.trans_critic_optimizer.zero_grad()
+        critic_loss.backward()
+        torch.nn.utils.clip_grad_value_(self.trans_critic.parameters(), self.grad_clip)
+        critic_grad_norm = sum(p.grad.norm().item() for p in self.trans_critic.parameters() if p.grad is not None)
 
         
         self.experiment.add_scalar('critic_grad_norm', critic_grad_norm, self.total_it)
         
-        if hasattr(self, 'critic'):
-            self.critic_optimizer.step()
-        else:
-            self.trans_critic_optimizer.step()
+        self.trans_critic_optimizer.step()
 
         # Delayed policy updates
         if self.total_it % self.policy_freq == 0:
 
             # Compute actor losse
-            if hasattr(self, 'critic'):
-                trans_loss = -self.critic.Q1(states[:,:,-1,:], self.trans_actor.actor_forward(states)).mean()
-            else:
-                trans_loss = -self.trans_critic.Q1(states, self.trans_actor.actor_forward(states)).mean()    
+            trans_loss = -self.trans_critic.Q1(states, self.trans_actor.actor_forward(states)).mean()    
             
             self.experiment.add_scalar('Actor_loss', trans_loss, self.total_it)
             
@@ -571,12 +552,8 @@ class TD3(object):
             self.experiment.add_scalar('actor_grad_norm', trans_grad_norm, self.total_it)
             self.trans_actor_optimizer.step()
             
-            if hasattr(self, 'critic'):
-                for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-            else:
-                for param, target_param in zip(self.trans_critic.parameters(), self.trans_critic_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)        
+            for param, target_param in zip(self.trans_critic.parameters(), self.trans_critic_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)        
 
             for param, target_param in zip(self.trans_actor.parameters(), self.trans_actor_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
