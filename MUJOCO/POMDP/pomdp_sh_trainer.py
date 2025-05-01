@@ -122,7 +122,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", default="TD3")                
     parser.add_argument("--env", default="HalfCheetah-v4")        
-    parser.add_argument("--obs_indices", default=[0,1,2,3,8,9,10,11,12]) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
+    parser.add_argument("--obs_indices", default=None) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state")
     parser.add_argument("--use_train_data", default=False)   # True, False
     parser.add_argument("--additional_ascent", default=None)  #MLP, Trans, None
@@ -156,12 +156,17 @@ if __name__ == "__main__":
         config = yaml.load(f, Loader=yaml.FullLoader)
     
         
-    for RUN in [4]:  
+    for RUN in [args.seed]:  
         
-        args.seed = RUN
-        
-        
-        path2run = f"__RLW_MATERIALS/WORKSHOP_RUNS/{args.env}/[STAGE1_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
+        if args.env == 'HalfCheetah-v4':
+            args.obs_indices = [0,1,2,3,8,9,10,11,12]
+        elif args.env == 'Ant-v4':
+            args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
+        elif args.env == 'Hopper-v4':
+            args.obs_indices = [0,1,2,3,4]
+            
+            
+        path2run = f"RLC_RUNS/{args.env}/[STAGE1_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
 
         experiment = SummaryWriter(log_dir=path2run)
         
@@ -270,7 +275,7 @@ if __name__ == "__main__":
                 tr_avg_reward = eval_transformer(policy, args, 1)
                 experiment.add_scalar('Trans_Eval_reward_1', tr_avg_reward, t)
                 
-                if (tr_avg_reward > max_trans_reward) and (tr_avg_reward > 3000):
+                if (tr_avg_reward > max_trans_reward):
                     max_trans_reward = tr_avg_reward
                     torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
                     torch.save(policy.trans_actor_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")

@@ -1,8 +1,8 @@
 model_config:
   num_layers : 1   #1 
-  d_model : 512   #512
+  d_model : 256   #512
   n_heads : 4   #4
-  dim_feedforward : 1024   #2048
+  dim_feedforward : 512   #2048
   conv_lat_dim : 120
   norm_first : False
   init : False   

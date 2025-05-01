@@ -14,7 +14,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ##################################
 import gym
 #import gymnasium as gym
-import pybullet_envs_gymnasium 
+#import pybullet_envs_gymnasium 
 ##################################
 
 def mean_padding(tensor, K):
@@ -314,13 +314,13 @@ class TD3(object):
         self.context_length = context_length
         
         if preload_weights==None:
-            # self.actor = Actor(state_dim, action_dim, max_action).to(device)
-            # self.actor_target = copy.deepcopy(self.actor).to(device)
-            # self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
+            self.actor = Actor(state_dim, action_dim, max_action).to(device)
+            self.actor_target = copy.deepcopy(self.actor).to(device)
+            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
 
-            # self.critic = Critic(state_dim, action_dim, obs_mode, model_config['conv_lat_dim']).to(device)
-            # self.critic_target = copy.deepcopy(self.critic).to(device)
-            # self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+            self.critic = Critic(state_dim, action_dim, obs_mode, model_config['conv_lat_dim']).to(device)
+            self.critic_target = copy.deepcopy(self.critic).to(device)
+            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
             
             
             #self.actor = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)

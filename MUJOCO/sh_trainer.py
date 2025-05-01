@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-with open("Shuttle/sh_config.yaml") as f:
+with open("MUJOCO/sh_config.yaml") as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 
@@ -162,9 +162,9 @@ if __name__ == "__main__":
     parser.add_argument("--env", default="HalfCheetah-v4")          # OpenAI gym environment name
     parser.add_argument("--obs_indices", default=None) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state")
-    parser.add_argument("--use_train_data", default=True)
-    parser.add_argument("--additional_ascent", default=True)
-    parser.add_argument("--evals_for_trans", default=10)
+    parser.add_argument("--use_train_data", default=False)
+    parser.add_argument("--additional_ascent", default=False)
+    parser.add_argument("--evals_for_trans", default=3)
     parser.add_argument("--num_envs", default=1, type=int)
     parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--trans_critic", default=False)
@@ -194,12 +194,21 @@ if __name__ == "__main__":
         config = yaml.load(f, Loader=yaml.FullLoader)
     
         
-    for RUN in [4]:  
+    for RUN in [args.seed]: 
+         
+        if args.env == 'HalfCheetah-v4':
+            args.obs_indices = [0,1,2,3,8,9,10,11,12]
+        elif args.env == 'Ant-v4':
+            args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
+        elif args.env == 'Hopper-v4':
+            args.obs_indices = [0,1,2,3,4]
         
-        args.seed = RUN
+        #path2run = f"Workshop_runs/{args.env}/[FINAL_ST1]|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
+
+        #path2run = f"FIG4_RUNS[MDP]/{args.env}/[SMALL_RB_EXP]"
         
-        
-        path2run = f"WORKSHOP_RUNS/{args.env}/[FINAL_ST1]|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
+        path2run = f"FIG4_RUNS[FINAL_MLP_POMDP]/{args.env}/seed={args.seed}"
+
 
         experiment = SummaryWriter(log_dir=path2run)
         
@@ -224,7 +233,7 @@ if __name__ == "__main__":
             kwargs["noise_clip"] = args.noise_clip * max_action
             kwargs["policy_freq"] = args.policy_freq
             kwargs["grad_clip"] = args.grad_clip
-            policy = TD3(args.num_envs, args.obs_mode ,config['train_config']['context_length'], config['model_config'], **kwargs) 
+            policy = TD3(args.num_envs, args.obs_mode ,5, config['model_config'], **kwargs)
             
         policy.experiment = experiment
         replay_buffer = ReplayBuffer(args.num_envs, state_dim, action_dim)
@@ -303,16 +312,16 @@ if __name__ == "__main__":
                 avg_reward = eval_policy(policy, args, args.evals_for_trans)
                 experiment.add_scalar('Eval_reward', avg_reward, t)
                 
-                policy.train_trans_actor(256, args.additional_ascent)
-                #policy.trans_RB.reset()
-                tr_avg_reward = eval_transformer(policy, args, 1)
-                experiment.add_scalar('Trans_Eval_reward_1', tr_avg_reward, t)
+                #policy.train_trans_actor(256, args.additional_ascent)
+                #tr_avg_reward = eval_transformer(policy, args, 1)
+                #experiment.add_scalar('Trans_Eval_reward_1', tr_avg_reward, t)
                 
-                if (tr_avg_reward > max_trans_reward) and (tr_avg_reward > 1000):
-                    max_trans_reward = tr_avg_reward
-                    torch.save(policy.trans, f"WORKSHOP_WEIGHTS/{args.env}/[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.trans_target, f"WORKSHOP_WEIGHTS/{args.env}/[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.critic, f"WORKSHOP_WEIGHTS/{args.env}/[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.critic_target, f"WORKSHOP_WEIGHTS/{args.env}/[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth") 
+                # if (tr_avg_reward > max_trans_reward) and (tr_avg_reward > 10):
+                #     max_trans_reward = tr_avg_reward
+                #     torch.save(policy.trans, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                #     torch.save(policy.trans_target, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                #     torch.save(policy.critic, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                #     torch.save(policy.critic_target, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth") 
+                
                 
          

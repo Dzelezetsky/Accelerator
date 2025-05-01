@@ -266,7 +266,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", default="TD3")                  
     parser.add_argument("--env", default="HalfCheetah-v4")       
-    parser.add_argument("--obs_indices", default=[0,1,2,3,8,9,10,11,12]) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
+    parser.add_argument("--obs_indices", default=None) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state") 
     parser.add_argument("--use_train_data", default=False)
     parser.add_argument("--additional_ascent", default=None)
@@ -276,9 +276,9 @@ if __name__ == "__main__":
     parser.add_argument("--trans_critic", default=False)
     parser.add_argument("--rb_size", default=500000, type=int)
     parser.add_argument("--separate_trans_critic", default=False)
-    parser.add_argument("--start_timesteps", default=25000, type=int)# Time steps initial random policy is used
+    parser.add_argument("--start_timesteps", default=0, type=int)# Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=3e3, type=int)       # How often (time steps) we evaluate
-    parser.add_argument("--max_timesteps", default=200e3, type=int)   # Max time steps to run environment
+    parser.add_argument("--max_timesteps", default=1e6, type=int)   # Max time steps to run environment
     parser.add_argument("--grad_clip", default=100000, type=int)
     parser.add_argument("--expl_noise", default=0.1, type=float)    # было 0.0
     parser.add_argument("--batch_size", default=256, type=int)      # 256
@@ -297,6 +297,7 @@ if __name__ == "__main__":
     
     config['model_config']['actor_mode'] = 'Trans'
     config['train_config']['replay_buffer_size'] = args.rb_size
+    
     if args.env == "HalfCheetah-v4":
         args.obs_indices = [0,1,2,3,8,9,10,11,12]
     elif args.env == "Ant-v4":
@@ -312,7 +313,7 @@ if __name__ == "__main__":
     
     for RUN in [args.seed]:
         #args.seed = RUN
-        path2run = f"RLC_RUNS/{args.env}/[SMALL_RB_EXP]|RB={args.rb_size}|seed={args.seed}|[{n_l}/{d_m}/{n_h}/{d_f}/{cont}]|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
+        path2run = f"RLC_RUNS/{args.env}/[STAGE2_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
     
         experiment = SummaryWriter(log_dir=path2run)
     
@@ -335,12 +336,12 @@ if __name__ == "__main__":
             kwargs["grad_clip"] = args.grad_clip
 
         
-        #pth2trans = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
-        #pth2trans_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
-        #pth2critic = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
-        #pth2critic_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        pth2trans = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        pth2trans_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        pth2critic = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        pth2critic_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
         
-        kwargs["preload_weights"] = None #[pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
+        kwargs["preload_weights"] = [pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
         policy = TD3(args.num_envs, 'state', config['train_config']['context_length'], config['model_config'], **kwargs)
         
         second_stage(policy, config, args, experiment)                    

@@ -9,7 +9,7 @@ import copy
 #########################################################
 from collections import defaultdict
 
-import pybullet_envs_gymnasium 
+#import pybullet_envs_gymnasium 
 ########################################################
 
 from torch.utils.tensorboard import SummaryWriter
@@ -187,7 +187,7 @@ def eval_LSTM(policy, args, eval_episodes=10):
 
 def acceleration(policy, config, args, experiment):
   
-
+    max_trans_reward = 0
     env, state_dim, action_dim = env_constructor(args.env, seed=args.seed, obs_indices=args.obs_indices)
     env.action_space.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -336,11 +336,21 @@ def acceleration(policy, config, args, experiment):
             avg_reward = eval_LSTM(policy, args, 5)
             experiment.add_scalar('LSTM_Eval_reward', avg_reward, t)
             policy.train_trans_actor(256, args.additional_ascent, args.additional_bellman)
-            avg_reward = eval_Trans(policy, args, 1)
-            experiment.add_scalar('Trans_Eval_reward', avg_reward, t)
+            tr_avg_reward = eval_Trans(policy, args, 1)
+            experiment.add_scalar('Trans_Eval_reward', tr_avg_reward, t)
+            if (tr_avg_reward > max_trans_reward):
+                    max_trans_reward = tr_avg_reward
+                    torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.trans_actor_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
+                    
+                    torch.save(policy.trans_critic, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.trans_critic_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
+                    
+                    torch.save(policy.critic, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.critic_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth") 
     
-    torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[NEW_ST_ST2]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-    torch.save(policy.trans_critic, f"RLC_WEIGHTS/{args.env}/[NEW_ST_ST2]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+    #torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[NEW_ST_ST2]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+    #torch.save(policy.trans_critic, f"RLC_WEIGHTS/{args.env}/[NEW_ST_ST2]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
 
 if __name__ == "__main__":
 
@@ -381,12 +391,18 @@ if __name__ == "__main__":
     d_f = config['model_config']['dim_feedforward']
     cont = config['train_config']['context_length']
     
-    for RUN in [4]:
-        args.seed = RUN  
+    for RUN in [args.seed]: 
         
-        path2run = 'DELETE'
-        #path2run = f"__RLW_MATERIALS/WORKSHOP_RUNS/{args.env}/[STAGE1_LSTM]|seed={args.seed}|[{n_l}/{d_m}/{n_h}/{d_f}/{cont}]|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|{}|{}"
-    
+        if args.env == 'HalfCheetah-v4':
+            args.obs_indices = [0,1,2,3,8,9,10,11,12]
+        elif args.env == 'Ant-v4':
+            args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
+        elif args.env == 'Hopper-v4':
+            args.obs_indices = [0,1,2,3,4]
+            
+            
+        path2run = f"RLC_RUNS/{args.env}/[STAGE1_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
+
         experiment = SummaryWriter(log_dir=path2run)
     
         test_env, state_dim, action_dim = env_constructor(args.env, seed=args.seed, obs_indices=args.obs_indices)
