@@ -4,7 +4,8 @@ import torch
 import argparse
 import os
 import yaml
-from Workshop_sh_tools4maniskill import TD3, ReplayBuffer, env_constructor
+from state_sh_tools_sac import SAC, ReplayBuffer, env_constructor
+
 import copy
 
 ##########################################
@@ -16,7 +17,7 @@ import gymnasium as gym
 from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 from collections import defaultdict
 ##########################################
-
+from torch.distributions import Normal
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -26,134 +27,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 with open("MANISKILL/state/sh_config.yaml") as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
-
-
-
-# def img_eval_transformer(policy, args, eval_episodes=1):
-#     '''
-    
-#     Transformers evaluation based on images and vector states.
-#     Agent recieves tensors (n_e, 1, context, 128, 128, 3/4) and (n_e, 1, context, s_d)
-#     ----- and returns tensor (n_e, 1, a_d)
-    
-#     '''
-#     eval_env, state_dim, action_dim = env_constructor(args.env, args.num_envs, 'rgb', reconf_freq=1)
-#     avg_reward = 0.
-#     avg_sr_end = 0.
-#     avg_sr_once= 0.
-#     policy.trans.eval()
-
-#     for _ in range(eval_episodes):
-#         state, info = eval_env.reset(seed=args.seed) 
-        
-#         img_state = state['rgb']/255.0            #img_state (n_e, 128, 128, 4/3)
-#         vec_state = state['state']            #img_state (n_e, s_d)
-#         img_states = copy.deepcopy(img_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #states (n_e, 1, 128, 128, 4/3)
-#         vec_states = copy.deepcopy(vec_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #states (n_e, 1, s_d)
-        
-#         t = -1
-#         while "final_info" not in info:
-#             t+=1
-#             if vec_states.shape[1] > policy.context_length :
-#                 img_states = img_states[:, -policy.context_length:, :]
-#                 vec_states = vec_states[:, -policy.context_length:, :]
-
-#             img_s = img_states.unsqueeze(1)              #s (n_e, 1, cont, 128, 128, 4/3)
-#             vec_s = vec_states.unsqueeze(1)              #s (n_e, 1, cont, s_d)
-#             sampled_action = policy.trans.actor_forward(vec_s, img_s)  # sampled_action Tens(n_e, 1, a_d)
-#             sampled_action = sampled_action.detach().cpu()
-#             action = np.clip( sampled_action.numpy()[:,0,], -1, 1)  #action Arr(n_e, a_d)
-
-#             state, r, terminated, truncated, info = eval_env.step( action )
-            
-#             img_state = state['rgb']/255.0            
-#             vec_state = state['state']           
-#             img_cur_state = copy.deepcopy(img_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #img_cur_state (n_e, 1, 128, 128, 4/3)
-#             vec_cur_state = copy.deepcopy(vec_state).unsqueeze(1).to(device=device, dtype=torch.float32)
-#             vec_states = torch.cat([vec_states, vec_cur_state], dim=1)
-#             img_states = torch.cat([img_states, img_cur_state], dim=1)                                          #img_states (n_e, cont, 128, 128, 4/3)
-
-#         avg_sr_once += info['final_info']['episode']['success_once'].cpu().numpy().sum() / args.num_envs
-#         avg_sr_end += info['final_info']['episode']['success_at_end'].cpu().numpy().sum() / args.num_envs
-#         avg_reward += info['final_info']['episode']['return'].cpu().numpy().sum() / args.num_envs 
-            
-
-#     avg_reward /= eval_episodes
-#     avg_sr_end /= eval_episodes
-#     avg_sr_once /= eval_episodes
-
-#     print("---------------------------------------")
-#     print(f"Transformer Evaluation over {eval_episodes} episodes: {avg_reward:.3f} ||| {avg_sr_end:.3f} ||| {avg_sr_once:.3f}")
-#     print("---------------------------------------")
-    
-#     policy.trans.train()
-    
-#     return avg_reward, avg_sr_end, avg_sr_once
-
-# def img_eval_policy(policy, args, eval_episodes=1):
-    
-#     eval_env, state_dim, action_dim = env_constructor(args.env, args.num_envs, 'state', reconf_freq=1)
-#     sim_env, _, _ = env_constructor(args.env, args.num_envs, 'rgb', reconf_freq=1)
-#     avg_reward = 0.
-#     avg_sr_end = 0.
-#     avg_sr_once= 0.
-    
-#     full_vec_out_states = []
-#     img_out_states = []
-#     vec_out_states = []
-#     out_actions = []
-    
-    
-#     for _ in range(eval_episodes):
-#         state, info = eval_env.reset(seed=args.seed)
-#         state = state['state']
-#         sim_state, _ = sim_env.reset(seed=args.seed)
-#         img_sim_state = sim_state['rgb'] # (n_e, 1, 128, 128, 4/3)
-#         vec_sim_state = sim_state['state'] # (n_e, 1, s_d)
-#         img_out_states.append( img_sim_state )
-#         vec_out_states.append( vec_sim_state )
-#         full_vec_out_states.append(state)
-#         t=0
-        
-#         while "final_info" not in info:
-#             t+=1
-#             action = policy.select_action(state)  # action: arr (n_e, a_d)
-            
-#             out_actions.append(torch.Tensor(action))  # Tens (n_e, a_d)
-            
-#             state, r, terminated, truncated, info = eval_env.step(action)
-#             state = state['state']
-#             sim_state, _, _, _, _ = sim_env.step(action)
-#             img_sim_state = sim_state['rgb'] # (n_e, 1, 128, 128, 4/3)
-#             vec_sim_state = sim_state['state'] # (n_e, 1, s_d)
-#             img_out_states.append( img_sim_state )
-#             vec_out_states.append( vec_sim_state )
-#             full_vec_out_states.append(state)
-            
-#             if (t >= policy.context_length):
-#                 full_vec_states2RB = full_vec_out_states[-2]
-#                 img_states2RB = img_out_states[-policy.context_length-1:-1]
-#                 vec_states2RB = vec_out_states[-policy.context_length-1:-1]
-#                 act2RB = out_actions[-1]
-#                 policy.trans_RB.recieve_traj(img_states2RB, vec_states2RB, act2RB, full_vec_states2RB)
-            
-#         avg_sr_once += info['final_info']['episode']['success_once'].cpu().numpy().sum() / args.num_envs
-#         avg_sr_end += info['final_info']['episode']['success_at_end'].cpu().numpy().sum() / args.num_envs
-#         avg_reward += info['final_info']['episode']['return'].cpu().numpy().sum() / args.num_envs 
-
-#     avg_reward /= eval_episodes
-#     avg_sr_end /= eval_episodes
-#     avg_sr_once /= eval_episodes
-
-#     print("---------------------------------------")
-#     print(f"Evaluation over {eval_episodes} episodes: {avg_reward:.3f} ||| {avg_sr_end:.3f} ||| {avg_sr_once:.3f}")
-#     print("---------------------------------------")
-    
-    
-    
-#     return avg_reward, avg_sr_end, avg_sr_once
-
-
+LOG_STD_MIN = -5
+LOG_STD_MAX = 2
 
 def eval_transformer(policy, args, eval_episodes=1):
     
@@ -177,7 +52,7 @@ def eval_transformer(policy, args, eval_episodes=1):
                 states = states[:, -policy.context_length:, :]
 
             s = states.unsqueeze(1)             #s (n_e, 1, cont, s_d)
-            sampled_action = policy.trans.actor_forward(s, show_percentage=True)  # sampled_action (n_e, 1, a_d)
+            sampled_action = policy.trans_actor(s, deterministic=True, with_logprob=False) # sampled_action (n_e, 1, a_d)
             sampled_action = sampled_action.detach().cpu()
             action = np.clip( sampled_action.numpy()[:,0,], -1, 1)  #action (n_e, a_d)
 
@@ -226,7 +101,7 @@ def eval_policy(policy, args, eval_episodes=1):
         
         while "final_info" not in info:
             t+=1
-            action = policy.select_action(state)  # action: arr (n_e, a_d)
+            action = policy.select_action(state, deterministic=True)  # action: arr (n_e, a_d)
             
             out_actions.append(torch.Tensor(action))  # Tens (n_e, a_d)
             
@@ -257,27 +132,21 @@ def eval_policy(policy, args, eval_episodes=1):
 
 
 if __name__ == "__main__":
-    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy", default="TD3")                  # 
-    parser.add_argument("--env", default="PushCube-v1")          # 
+    parser.add_argument("--env", default="PushCube-v1")
     parser.add_argument("--num_envs", default=50, type=int)
     parser.add_argument("--seed", default=2, type=int)
     parser.add_argument("--use_train_data", default=True, type=bool)
     parser.add_argument("--additional_ascent", default=False, type=bool)  
-    parser.add_argument("--start_trans_train", default=0, type=int)  #30
-    parser.add_argument("--start_timesteps", default=5e2, type=int)# 
-    parser.add_argument("--eval_freq", default=6e2, type=int)       # 2e2
-    parser.add_argument("--max_timesteps", default=70000, type=int)   # !!!!!50000!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    parser.add_argument("--expl_noise", default=0.1, type=float)    # 
-    parser.add_argument("--batch_size", default=600, type=int)      # 256
-    parser.add_argument("--discount", default=0.8, type=float)     # 0.99
-    parser.add_argument("--tau", default=0.01, type=float)         # 0.005
-    parser.add_argument("--policy_noise", default=0.2)              # 
-    parser.add_argument("--noise_clip", default=0.5)                # R
-    parser.add_argument("--policy_freq", default=2, type=int)       # Frequency of delayed policy updates
-    parser.add_argument("--save_model", action="store_true")        # Save model and optimizer parameters
-    parser.add_argument("--load_model", default="")                 # Model load file name, "" doesn't load, "default" uses file_name
+    parser.add_argument("--start_trans_train", default=0, type=int)
+    parser.add_argument("--start_timesteps", default=500, type=int)
+    parser.add_argument("--eval_freq", default=600, type=int)
+    parser.add_argument("--max_timesteps", default=70000, type=int)
+    parser.add_argument("--batch_size", default=600, type=int)
+    parser.add_argument("--discount", default=0.8, type=float)
+    parser.add_argument("--tau", default=0.01, type=float)
+    parser.add_argument("--save_model", action="store_true")
+    parser.add_argument("--load_model", default="")
     args = parser.parse_args()
 
     file_name = f"{args.policy}_{args.env}_{args.seed}"
@@ -286,10 +155,9 @@ if __name__ == "__main__":
     print("---------------------------------------")
 
     
-    for RUN in [2,3]:
-        args.seed = RUN
+    for RUN in [args.seed]:
         
-        path2run = f"ECAI_REBUTTAL_ST1/{args.env}/[NEW_ST_ST1]|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
+        path2run = f"ECAI_SAC_CAMERA_READY_ST1/{args.env}/seed={args.seed}"
         experiment = SummaryWriter(log_dir=path2run)
         
         env, state_dim, action_dim = env_constructor(args.env, args.num_envs, 'state', reconf_freq=None)
@@ -310,13 +178,10 @@ if __name__ == "__main__":
             "tau": args.tau,
         }
 
-        # Initialize policy
-        if args.policy == "TD3":
-            # Target policy smoothing is scaled wrt the action scale
-            kwargs["policy_noise"] = args.policy_noise * max_action
-            kwargs["noise_clip"] = args.noise_clip * max_action
-            kwargs["policy_freq"] = args.policy_freq
-            policy = TD3(args.num_envs, 'state', config['train_config']['context_length'], config['model_config'], **kwargs)
+        policy = SAC(args.num_envs, 'state', config['train_config']['context_length'],
+             config['model_config'],
+             state_dim, action_dim, max_action,
+             discount=args.discount, tau=args.tau)
         
         policy.experiment = experiment
         replay_buffer = ReplayBuffer(args.num_envs, state_dim, action_dim)
@@ -343,14 +208,9 @@ if __name__ == "__main__":
             if t < args.start_timesteps:
                 action = env.action_space.sample()  # Array n_e, a_d
             else:
-                action = policy.select_action(state)
-                noise = np.random.normal(0, args.expl_noise, size=action.shape) 
-                action = (action + noise).clip(-max_action, max_action)      # arr n_e, a_d
+                action = policy.actor(state, deterministic=False, with_logprob=False).detach().cpu().numpy()      # arr n_e, a_d
                 
-                # action = (
-                #     np.array( policy.select_action(state) )
-                #     + np.random.normal(0, args.expl_noise, size=action_dim)
-                # ).clip(-max_action, max_action)
+                
 
             
             
@@ -378,7 +238,7 @@ if __name__ == "__main__":
             if t >= args.start_timesteps:
                 policy.train(replay_buffer, args.batch_size)
                 if args.use_train_data:
-                    policy.train_trans(policy, 256, experiment, additional_ascent=args.additional_ascent)
+                    policy.train_trans_actor(256, additional_ascent=args.additional_ascent)
             if "final_info" in info: 
                 avg_sr_once = info['final_info']['episode']['success_once'].cpu().numpy().sum() / args.num_envs
                 avg_sr_end = info['final_info']['episode']['success_at_end'].cpu().numpy().sum() / args.num_envs
@@ -410,12 +270,12 @@ if __name__ == "__main__":
                     policy.train_trans(policy, 256, experiment, additional_ascent=args.additional_ascent) #256
                     
                     
-                    if (tr_avg_reward > max_trans_reward) and (tr_avg_reward > 10):
+                    if tr_avg_reward > max_trans_reward:
                         max_trans_reward = tr_avg_reward
-                        torch.save(policy.trans, f"ECAI_REBUTTAL_ST1/{args.env}/[NEW_ST_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                        torch.save(policy.trans_target, f"ECAI_REBUTTAL_ST1/{args.env}/[NEW_ST_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                        torch.save(policy.critic, f"ECAI_REBUTTAL_ST1/{args.env}/[NEW_ST_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                        torch.save(policy.critic_target, f"ECAI_REBUTTAL_ST1/{args.env}/[NEW_ST_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth") 
+                        torch.save(policy.trans_actor, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                        torch.save(policy.trans_actor_target, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                        torch.save(policy.critic, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                        torch.save(policy.critic_target, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
                 else:
                     policy.trans_RB.reset()    
                 

@@ -344,25 +344,29 @@ class TD3(object):
             #self.critic_target = copy.deepcopy(self.critic).to(device)
             #self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
             
-            model_config['actor_mode'] = 'LSTM'
-            self.actor = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)
-            self.actor_target = copy.deepcopy(self.actor).to(device)
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
+            # model_config['actor_mode'] = 'LSTM'
+            # self.actor = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)
+            # self.actor_target = copy.deepcopy(self.actor).to(device)
+            # self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
             
             
-            self.critic = LSTM_Critic(state_dim=state_dim, action_dim=action_dim, d_model=256, num_heads=2, num_layers=1).to(device)
-            self.critic_target = copy.deepcopy(self.critic).to(device)
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+            # self.critic = LSTM_Critic(state_dim=state_dim, action_dim=action_dim, d_model=256, num_heads=2, num_layers=1).to(device)
+            # self.critic_target = copy.deepcopy(self.critic).to(device)
+            # self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
             
-            model_config['actor_mode'] = 'Trans'
+            # model_config['actor_mode'] = 'Trans'
             self.trans_actor = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)
             self.trans_actor_target = copy.deepcopy(self.trans_actor).to(device)
             self.trans_actor_optimizer = torch.optim.Adam(self.trans_actor.parameters(), lr=3e-4)
             
-            self.trans_critic = Trans_Critic(state_dim=state_dim, action_dim=action_dim, d_model=256, num_heads=2, num_layers=1).to(device)
+            # self.trans_critic = Trans_Critic(state_dim=state_dim, action_dim=action_dim, d_model=256, num_heads=2, num_layers=1).to(device)
+            # self.trans_critic_target = copy.deepcopy(self.trans_critic).to(device)
+            # self.trans_critic_optimizer = torch.optim.Adam(self.trans_critic.parameters(), lr=3e-4)
+            # self.trans_RB = Trans_RB(num_envs, 30000, context_length, state_dim, action_dim) 
+            
+            self.trans_critic = Critic(state_dim, action_dim, obs_mode, model_config['conv_lat_dim']).to(device)
             self.trans_critic_target = copy.deepcopy(self.trans_critic).to(device)
             self.trans_critic_optimizer = torch.optim.Adam(self.trans_critic.parameters(), lr=3e-4)
-            self.trans_RB = Trans_RB(num_envs, 30000, context_length, state_dim, action_dim) 
             
         
         elif preload_weights != None:
@@ -515,12 +519,12 @@ class TD3(object):
                 noise = ( torch.randn_like(next_action) * self.policy_noise ).clamp(-self.noise_clip, self.noise_clip)  
                 next_action = (next_action + noise).clamp(-self.max_action, self.max_action)
             
-            target_Q1, target_Q2 = self.trans_critic_target(next_states, next_action)
+            target_Q1, target_Q2 = self.trans_critic_target(next_states[:,:,-1,:], next_action)
             
             target_Q = torch.min(target_Q1, target_Q2)                                      #target_Q = (n_e, bs, 1)
             target_Q = rewards + (1-dones) * self.discount * target_Q       #target_Q = (n_e, bs, 1) + (n_e, bs, 1) * const * (n_e, bs, 1)
         
-        current_Q1, current_Q2 = self.trans_critic(states, actions)
+        current_Q1, current_Q2 = self.trans_critic(states[:,:,-1,:], actions)
 
 
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
@@ -540,7 +544,7 @@ class TD3(object):
         if self.total_it % self.policy_freq == 0:
 
             # Compute actor losse
-            trans_loss = -self.trans_critic.Q1(states, self.trans_actor.actor_forward(states)).mean()    
+            trans_loss = -self.trans_critic.Q1(states[:,:,-1,:], self.trans_actor.actor_forward(states)).mean()    
             
             self.experiment.add_scalar('Actor_loss', trans_loss, self.total_it)
             

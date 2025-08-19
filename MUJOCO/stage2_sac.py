@@ -4,11 +4,12 @@ import torch
 import argparse
 import os
 import yaml
-from pomdp_lstm_sh_tools4mujoco import TD3, New_Trans_RB, env_constructor
+from sh_tools4mujoco_sac import SAC, New_Trans_RB, env_constructor
 import copy
 #########################################################
 from collections import defaultdict
 
+import gym 
 #import pybullet_envs_gymnasium 
 ########################################################
 
@@ -61,26 +62,18 @@ def mean_padding(tensor, K):
 
 
 
-
-
-
-
-
-def eval_Trans(policy, args, eval_episodes=10):
+def eval_transformer_2stage(policy, args, eval_episodes=10):
     
     eval_env, state_dim, action_dim = env_constructor(args.env, seed=args.seed+100, obs_indices=args.obs_indices)
     
     avg_reward = 0.
-    
 
-    policy.actor.eval()
-    
+    policy.trans_actor.eval()
     for _ in range(eval_episodes):
         state = eval_env.reset()
         done = False
         
         st_state = state       #state (n_e, s_d)
-        
         st_states = copy.deepcopy(st_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #state (n_e, 1, s_d)
         
         t = -1
@@ -92,21 +85,16 @@ def eval_Trans(policy, args, eval_episodes=10):
             st_s = st_states.unsqueeze(1)             #st_s (n_e, 1, cont, s_d)
             st_s = mean_padding(st_s, policy.context_length)
             
-            sampled_action = policy.trans_actor.actor_forward(st_s)                   
+            sampled_action, _, _, _ = policy.trans_actor(st_s, deterministic=True)                   
             sampled_action = sampled_action.detach().cpu()
             action = np.clip( sampled_action.numpy()[:,0,], -1, 1)  #action (n_e, a_d)
 
-            
             state, r, done, info = eval_env.step( action[0] )
 
             avg_reward += r.item()
             st_state = state#['state'] 
-            
-            
             st_cur_state = copy.deepcopy(st_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #cur_state (n_e, 1, s_d)
-            st_states = torch.cat([st_states, st_cur_state], dim=1)                                 #states (n_e, cont+1, s_d)
-            
-            
+            st_states = torch.cat([st_states, st_cur_state], dim=1)                                          #states (n_e, cont+1, s_d)
 
     avg_reward /= eval_episodes 
             
@@ -114,80 +102,14 @@ def eval_Trans(policy, args, eval_episodes=10):
     print(f"Transormer evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
     print("---------------------------------------")
     
-    policy.actor.train()
+    policy.trans_actor.train()
     
     return avg_reward
 
 
-
-
-
-
-
-
-
-def eval_LSTM(policy, args, eval_episodes=10):
-    
-    eval_env, state_dim, action_dim = env_constructor(args.env, seed=args.seed+100, obs_indices=args.obs_indices)
-    
-    avg_reward = 0.
-    
-    out_states = []
-    out_actions = []
-
-    policy.actor.eval()
-    
-    for _ in range(eval_episodes):
-        state = eval_env.reset()
-        done = False
-        
-        st_state = state       #state (n_e, s_d)
-        out_states.append( st_state )
-        st_states = copy.deepcopy(st_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #state (n_e, 1, s_d)
-        
-        t = -1
-        while done == False:
-            t+=1
-            if st_states.shape[1] > policy.context_length :              # st_states: ne, cont, sd
-                st_states = st_states[:, -policy.context_length:, :]
-            
-            st_s = st_states.unsqueeze(1)             #st_s (n_e, 1, cont, s_d)
-            st_s = mean_padding(st_s, policy.context_length)
-            
-            sampled_action = policy.actor.actor_forward(st_s)                   
-            sampled_action = sampled_action.detach().cpu()
-            action = np.clip( sampled_action.numpy()[:,0,], -1, 1)  #action (n_e, a_d)
-
-            out_actions.append(torch.Tensor(action))
-            state, r, done, info = eval_env.step( action[0] )
-
-            avg_reward += r.item()
-            st_state = state#['state'] 
-            out_states.append( st_state )
-            
-            st_cur_state = copy.deepcopy(st_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #cur_state (n_e, 1, s_d)
-            st_states = torch.cat([st_states, st_cur_state], dim=1)                                 #states (n_e, cont+1, s_d)
-            
-            #if (t > policy.context_length):
-            states2RB = out_states[-policy.context_length-1:-1]
-            next_states2RB = out_states[-policy.context_length:]
-            act2RB = out_actions[-1]
-            policy.trans_RB.recieve_traj(states2RB, next_states2RB, act2RB, r.reshape(1,-1), 1-done.to(int))
-
-    avg_reward /= eval_episodes 
-            
-    print("---------------------------------------")
-    print(f"LSTM evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
-    print("---------------------------------------")
-    
-    policy.actor.train()
-    
-    return avg_reward
-
-
-def acceleration(policy, config, args, experiment):
+def second_stage(policy, config, args, experiment):
   
-    max_trans_reward = 0
+
     env, state_dim, action_dim = env_constructor(args.env, seed=args.seed, obs_indices=args.obs_indices)
     env.action_space.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -201,12 +123,12 @@ def acceleration(policy, config, args, experiment):
     
     eval_counter = 0
     eval_counter += 1
-    avg_reward = eval_LSTM(policy, args, 20)
+    avg_reward = eval_transformer_2stage(policy, args, 20)
     experiment.add_scalar('Eval_reward', avg_reward, 1)
     
     
-    policy.actor.train()
-    policy.critic.train()
+    policy.trans_actor.train()
+    policy.trans_critic.train()
 
     out_states = []
     out_actions = []
@@ -233,7 +155,7 @@ def acceleration(policy, config, args, experiment):
     episode_num = 0
     
     done = False
-    avg_reward = eval_LSTM(policy, args, 10)
+    avg_reward = eval_transformer_2stage(policy, args, 10)
     experiment.add_scalar('Eval_reward', avg_reward, 0)
     
     for t in range(int(args.max_timesteps)):
@@ -253,7 +175,7 @@ def acceleration(policy, config, args, experiment):
             out_actions.append(torch.Tensor(action).unsqueeze(0))
         else:
             st_s = mean_padding(st_s, context_length)
-            sampled_action = policy.actor.actor_forward(st_s)
+            sampled_action, _,_,_ = policy.trans_actor(st_s)
             sampled_action = sampled_action.detach().cpu()[:,0,]            #sampled_action=Tensor(n_e, a_d)
             out_actions.append(sampled_action)
             action = np.clip( sampled_action.numpy()[0], -1, 1)                #action=Arr(n_e, a_d) 
@@ -297,7 +219,7 @@ def acceleration(policy, config, args, experiment):
         
         
         if t >= args.start_timesteps: #было 512
-            policy.train(args.batch_size)
+            policy.stage_2_train(args.batch_size)
                
 
         if done:
@@ -333,41 +255,28 @@ def acceleration(policy, config, args, experiment):
         # Evaluate episode
         if ((t + 1) % args.eval_freq == 0) and (t >= args.start_timesteps):
             #eval_counter += 1
-            avg_reward = eval_LSTM(policy, args, 5)
-            experiment.add_scalar('LSTM_Eval_reward', avg_reward, t)
-            policy.train_trans_actor(256, args.additional_ascent, args.additional_bellman)
-            tr_avg_reward = eval_Trans(policy, args, 1)
-            experiment.add_scalar('Trans_Eval_reward', tr_avg_reward, t)
-            if (tr_avg_reward > max_trans_reward):
-                    max_trans_reward = tr_avg_reward
-                    torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.trans_actor_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    
-                    torch.save(policy.trans_critic, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.trans_critic_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    
-                    torch.save(policy.critic, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.critic_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth") 
+            avg_reward = eval_transformer_2stage(policy, args, 10)
+            experiment.add_scalar('Eval_reward', avg_reward, t)
     
-    #torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[NEW_ST_ST2]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-    #torch.save(policy.trans_critic, f"RLC_WEIGHTS/{args.env}/[NEW_ST_ST2]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+    torch.save(policy.trans_actor, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST2]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+    torch.save(policy.trans_critic, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", default="TD3")                  
     parser.add_argument("--env", default="HalfCheetah-v4")       
-    parser.add_argument("--obs_indices", default=None)   #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
+    parser.add_argument("--obs_indices", default=None) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state") 
-    parser.add_argument("--use_train_data", default=False)
+    parser.add_argument("--use_train_data", default=True)
     parser.add_argument("--additional_ascent", default=None)
-    parser.add_argument("--additional_bellman", default=None)  #MLP, Trans, None
-    parser.add_argument("--evals_for_trans", default=10)   # ???????
+    parser.add_argument("--additional_bellman", default=None)
     parser.add_argument("--num_envs", default=1, type=int)
     parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--trans_critic", default=False)
+    parser.add_argument("--rb_size", default=1000000, type=int)
     parser.add_argument("--separate_trans_critic", default=False)
-    parser.add_argument("--start_timesteps", default=25000, type=int)# Time steps initial random policy is used
+    parser.add_argument("--start_timesteps", default=1000, type=int)# Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=3e3, type=int)       # How often (time steps) we evaluate
     parser.add_argument("--max_timesteps", default=1e6, type=int)   # Max time steps to run environment
     parser.add_argument("--grad_clip", default=100000, type=int)
@@ -385,48 +294,54 @@ if __name__ == "__main__":
     with open("MUJOCO/sh_config.yaml") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     
+    
+    config['model_config']['actor_mode'] = 'Trans'
+    config['train_config']['replay_buffer_size'] = args.rb_size
+    
+    # if args.env == "HalfCheetah-v4":
+    #     args.obs_indices = [0,1,2,3,8,9,10,11,12]
+    # elif args.env == "Ant-v4":
+    #     args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]    
+    # elif args.env == "Hopper-v4":
+    #     args.obs_indices = [0,1,2,3,4]    
+    
     n_l = config['model_config']['num_layers']
     d_m = config['model_config']['d_model']
     n_h = config['model_config']['n_heads']
     d_f = config['model_config']['dim_feedforward']
     cont = config['train_config']['context_length']
     
-    for RUN in [args.seed]: 
-        
-        if args.env == 'HalfCheetah-v4':
-            args.obs_indices = [0,1,2,3,8,9,10,11,12]
-        elif args.env == 'Ant-v4':
-            args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
-        elif args.env == 'Hopper-v4':
-            args.obs_indices = [0,1,2,3,4]
-            
-            
-        path2run = f"RLC_RUNS/{args.env}/[STAGE1_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
-
+    for RUN in [args.seed]:
+        #args.seed = RUN
+        path2run = f"ECAI_SAC_CAMERA_READY_ST2/{args.env}/seed={args.seed}"
+    
         experiment = SummaryWriter(log_dir=path2run)
     
         test_env, state_dim, action_dim = env_constructor(args.env, seed=args.seed, obs_indices=args.obs_indices)
-    
+
+        max_action = 1.
+        
         kwargs = {
             "state_dim": state_dim,
             "action_dim": action_dim,
-            "max_action": 1,
+            "max_action": max_action,
             "discount": args.discount,
             "tau": args.tau,
         }
     
         # Initialize policy
-        if args.policy == "TD3":
-            # Target policy smoothing is scaled wrt the action scale
-            kwargs["policy_noise"] = args.policy_noise * 1
-            kwargs["noise_clip"] = args.noise_clip * 1
-            kwargs["policy_freq"] = args.policy_freq
-            kwargs["grad_clip"] = args.grad_clip
+        #kwargs["policy_noise"] = args.policy_noise * 1
+        #kwargs["noise_clip"] = args.noise_clip * 1
+        #kwargs["policy_freq"] = args.policy_freq
+        kwargs["grad_clip"] = args.grad_clip
 
+                
+        pth2trans = f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        pth2trans_tgt = f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        pth2critic = f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        pth2critic_tgt = f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
         
+        kwargs["preload_weights"] = [pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
+        policy = SAC(args.num_envs, args.obs_mode ,5, config['model_config'], **kwargs)
         
-        
-        kwargs["preload_weights"] = None #[pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
-        policy = TD3(args.num_envs, 'state', config['train_config']['context_length'], config['model_config'], **kwargs)
-        
-        acceleration(policy, config, args, experiment)                    
+        second_stage(policy, config, args, experiment)                    

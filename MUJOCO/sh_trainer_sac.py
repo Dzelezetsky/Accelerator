@@ -4,10 +4,11 @@ import torch
 import argparse
 import os
 import yaml
+from sh_tools4mujoco_sac import SAC, ReplayBuffer
 import copy
 
 ##########################################
-from sh_tools4mujoco import TD3, New_Trans_RB, env_constructor, mean_padding, ReplayBuffer
+from sh_tools4mujoco_sac import SAC, New_Trans_RB, env_constructor
 ##########################################
 
 
@@ -34,19 +35,36 @@ def eval_transformer(policy, args, eval_episodes=10):
         state = eval_env.reset()
         done = False
         
-        st_state = state       #state (n_e, s_d)
+        st_state = state#['state']            #state (n_e, s_d)
         st_states = copy.deepcopy(st_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #state (n_e, 1, s_d)
+        if args.obs_mode != 'state':
+            img_state = state[f"{args.obs_mode}"]   #img_state (n_e, 128, 128, 4/3)
+            img_states = copy.deepcopy(img_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #img_states (n_e, 1, 128, 128, 4/3)
         
         t = -1
         while done == False:
             t+=1
-            if st_states.shape[1] > policy.context_length :              # st_states: ne, cont, sd
+            if st_states.shape[1] > policy.context_length : 
                 st_states = st_states[:, -policy.context_length:, :]
-            
+                if args.obs_mode != 'state':
+                    img_states = img_states[:, -policy.context_length:, :]
+                    
             st_s = st_states.unsqueeze(1)             #st_s (n_e, 1, cont, s_d)
-            st_s = mean_padding(st_s, policy.context_length)
+            if args.obs_mode != 'state':
+                img_s = img_states.unsqueeze(1)              #img_s (n_e, 1, cont, 128, 128, 4/3)
             
-            sampled_action = policy.trans_actor.actor_forward(st_s)                   
+            
+            #sampled_action = policy.trans.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)
+            # if tr_num == 1:
+            #     sampled_action = policy.trans1.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)  # sampled_action (n_e, 1, a_d)
+            # elif tr_num == 2:
+            #     sampled_action = policy.trans2.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)
+            # elif tr_num == 3:
+            #     sampled_action = policy.trans3.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)
+            # elif tr_num == 4:
+            #     sampled_action = policy.trans4.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)
+            
+            sampled_action = policy.trans_actor(st_s, deterministic=True, with_logprob=False)             
             sampled_action = sampled_action.detach().cpu()
             action = np.clip( sampled_action.numpy()[:,0,], -1, 1)  #action (n_e, a_d)
 
@@ -56,13 +74,26 @@ def eval_transformer(policy, args, eval_episodes=10):
             st_state = state#['state'] 
             st_cur_state = copy.deepcopy(st_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #cur_state (n_e, 1, s_d)
             st_states = torch.cat([st_states, st_cur_state], dim=1)                                          #states (n_e, cont+1, s_d)
+            if args.obs_mode != 'state':
+                img_state = state[f"{args.obs_mode}"]   #img_state (n_e, 128, 128, 4/3)
+                img_cur_state = copy.deepcopy(img_state).unsqueeze(1).to(device=device, dtype=torch.float32)  #img_cur_state (n_e, 1, 128, 128, 4/3)
+                img_states = torch.cat([img_states, img_cur_state], dim=1)                                          #states (n_e, cont+1, s_d)
 
     avg_reward /= eval_episodes 
             
+
     print("---------------------------------------")
     print(f"Transormer evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
     print("---------------------------------------")
     
+    # if tr_num == 1:
+    #     policy.trans1.train()
+    # elif tr_num == 2:
+    #     policy.trans2.train()
+    # elif tr_num == 3:
+    #     policy.trans3.train()
+    # elif tr_num == 4:
+    #     policy.trans4.train()
     policy.trans_actor.train()
     
     return avg_reward
@@ -83,10 +114,14 @@ def eval_policy(policy, args, eval_episodes=10):
     for _ in range(eval_episodes):
         state = eval_env.reset()
         done = False
-        st_state = state              #state (n_e, s_d)
+        st_state = state#['state']   #state (n_e, s_d)
         out_states.append( st_state )
+        if args.obs_mode != 'state':
+            img_state = state[f"{args.obs_mode}"] #img_state (n_e, 128, 128, 4/3)
+            out_img_states.append(img_state)
         
         t=0
+        
         while done == False:
             t+=1
             action = policy.select_action(st_state)  # action: arr (n_e, a_d)
@@ -96,14 +131,17 @@ def eval_policy(policy, args, eval_episodes=10):
             state, r, done, info = eval_env.step( action[0] ) #action[0] arr(,a_d)
             avg_reward += r.item()
             
-            st_state = state               #state (n_e, s_d)
+            st_state = state#['state']   #state (n_e, s_d)
             out_states.append( st_state )
+            if args.obs_mode != 'state':
+                img_state = state[f"{args.obs_mode}"] #img_state (n_e, 128, 128, 4/3)
+                out_img_states.append(img_state)
             
-            #if (t > policy.context_length):
-            states2RB = out_states[-policy.context_length-1:-1]
-            next_states2RB = out_states[-policy.context_length:]
-            act2RB = out_actions[-1]
-            policy.trans_RB.recieve_traj(states2RB, next_states2RB, act2RB, r.reshape(1,-1), 1-done.to(int))
+            if (t > policy.context_length):
+                states2RB = out_states[-policy.context_length-1:-1]
+                next_states2RB = out_states[-policy.context_length:]
+                act2RB = out_actions[-1]
+                policy.trans_RB.recieve_traj(states2RB, next_states2RB, act2RB, r.reshape(1,-1), 1-done.to(int))
     
     avg_reward /= eval_episodes         
     
@@ -120,31 +158,31 @@ def eval_policy(policy, args, eval_episodes=10):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy", default="TD3")                
-    parser.add_argument("--env", default="HalfCheetah-v4")        
+    parser.add_argument("--policy", default="TD3")                  # Policy name (TD3, DDPG or OurDDPG)
+    parser.add_argument("--env", default="HalfCheetah-v4")          # OpenAI gym environment name
     parser.add_argument("--obs_indices", default=None) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state")
-    parser.add_argument("--use_train_data", default=False)   # True, False
-    parser.add_argument("--additional_ascent", default=None)  #MLP, Trans, None
-    parser.add_argument("--additional_bellman", default=None)  #MLP, Trans, None
-    parser.add_argument("--evals_for_trans", default=10)   # ???????
+    parser.add_argument("--use_train_data", default=True)
+    parser.add_argument("--additional_ascent", default=None)
+    parser.add_argument("--evals_for_trans", default=3)
     parser.add_argument("--num_envs", default=1, type=int)
     parser.add_argument("--seed", default=1, type=int)
-    parser.add_argument("--trans_critic", default=False) # NOT USED
-    parser.add_argument("--separate_trans_critic", default=False) # NOT USED
-    parser.add_argument("--start_timesteps", default=25e3, type=int)
+    parser.add_argument("--trans_critic", default=False)
+    parser.add_argument("--separate_trans_critic", default=False)
+    parser.add_argument("--additional_bellman", default=None)
+    parser.add_argument("--start_timesteps", default=5e3, type=int)# Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=3e3, type=int)       # 2e3
-    parser.add_argument("--max_timesteps", default=1.3e6, type=int) 
+    parser.add_argument("--max_timesteps", default=1e6, type=int)   # Max time steps to run environment
     parser.add_argument("--grad_clip", default=1000000, type=int)
-    parser.add_argument("--expl_noise", default=0.1, type=float)    
-    parser.add_argument("--batch_size", default=256, type=int)    
-    parser.add_argument("--discount", default=0.99, type=float)     
-    parser.add_argument("--tau", default=0.005, type=float)         
-    parser.add_argument("--policy_noise", default=0.2)              
-    parser.add_argument("--noise_clip", default=0.5)               
-    parser.add_argument("--policy_freq", default=2, type=int)       
-    parser.add_argument("--save_model", action="store_true")        
-    parser.add_argument("--load_model", default="")                 
+    parser.add_argument("--expl_noise", default=0.0, type=float)    # Std of Gaussian exploration noise
+    parser.add_argument("--batch_size", default=256, type=int)      # 256
+    parser.add_argument("--discount", default=0.99, type=float)     # 0.99
+    parser.add_argument("--tau", default=0.005, type=float)         # 0.005
+    parser.add_argument("--policy_noise", default=0.2)              # Noise added to target policy during critic update
+    parser.add_argument("--noise_clip", default=0.5)                # Range to clip target policy noise
+    parser.add_argument("--policy_freq", default=2, type=int)       # Frequency of delayed policy updates
+    parser.add_argument("--save_model", action="store_true")        # Save model and optimizer parameters
+    parser.add_argument("--load_model", default="")                 # Model load file name, "" doesn't load, "default" uses file_name
     args = parser.parse_args()
 
     
@@ -156,17 +194,19 @@ if __name__ == "__main__":
         config = yaml.load(f, Loader=yaml.FullLoader)
     
         
-    for RUN in [args.seed]:  
+    for RUN in [args.seed]: 
+         
+        # if args.env == 'HalfCheetah-v4':
+        #     args.obs_indices = [0,1,2,3,8,9,10,11,12]
+        # elif args.env == 'Ant-v4':
+        #     args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
+        # elif args.env == 'Hopper-v4':
+        #     args.obs_indices = [0,1,2,3,4]
         
-        if args.env == 'HalfCheetah-v4':
-            args.obs_indices = [0,1,2,3,8,9,10,11,12]
-        elif args.env == 'Ant-v4':
-            args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
-        elif args.env == 'Hopper-v4':
-            args.obs_indices = [0,1,2,3,4]
-            
-            
-        path2run = f"RLC_RUNS/{args.env}/[STAGE1_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
+        
+        
+        path2run = f"ECAI_SAC_CAMERA_READY_ST1/{args.env}/seed={args.seed}"
+
 
         experiment = SummaryWriter(log_dir=path2run)
         
@@ -187,11 +227,11 @@ if __name__ == "__main__":
 
         if args.policy == "TD3":
             
-            kwargs["policy_noise"] = args.policy_noise * max_action
-            kwargs["noise_clip"] = args.noise_clip * max_action
-            kwargs["policy_freq"] = args.policy_freq
+            #kwargs["policy_noise"] = args.policy_noise * max_action
+            #kwargs["noise_clip"] = args.noise_clip * max_action
+            #kwargs["policy_freq"] = args.policy_freq
             kwargs["grad_clip"] = args.grad_clip
-            policy = TD3(args.num_envs, args.obs_mode ,config['train_config']['context_length'], config['model_config'], **kwargs) 
+            policy = SAC(args.num_envs, args.obs_mode ,5, config['model_config'], **kwargs)
             
         policy.experiment = experiment
         replay_buffer = ReplayBuffer(args.num_envs, state_dim, action_dim)
@@ -232,11 +272,11 @@ if __name__ == "__main__":
                 out_actions.append(torch.Tensor(action))
                 vec_out_states.append(next_state)
                 
-                #if (t > policy.context_length):
-                vec_states2RB = vec_out_states[-policy.context_length-1:-1]
-                next_vec_states2RB = vec_out_states[-policy.context_length:]
-                act2RB = out_actions[-1]
-                policy.trans_RB.recieve_traj(vec_states2RB, next_vec_states2RB, act2RB, r.reshape(1,-1), 1-done.to(int))
+                if (t > policy.context_length):
+                    vec_states2RB = vec_out_states[-policy.context_length-1:-1]
+                    next_vec_states2RB = vec_out_states[-policy.context_length:]
+                    act2RB = out_actions[-1]
+                    policy.trans_RB.recieve_traj(vec_states2RB, next_vec_states2RB, act2RB, r.reshape(1,-1), 1-done.to(int))
 
 ################################################################     
                    
@@ -253,7 +293,7 @@ if __name__ == "__main__":
             if t >= args.start_timesteps:
                 policy.train(replay_buffer, args.batch_size)
                 if args.use_train_data:
-                    policy.train_trans_actor(256, args.additional_ascent, args.additional_bellman)
+                    policy.train_trans_actor(256, args.additional_ascent)
             if done: 
                 avg_ret = avg_ret / args.num_envs
                 print(f"Total T: {t+1} Episode Num: {episode_num+1} | Reward: {avg_ret}")
@@ -270,20 +310,16 @@ if __name__ == "__main__":
                 avg_reward = eval_policy(policy, args, args.evals_for_trans)
                 experiment.add_scalar('Eval_reward', avg_reward, t)
                 
-                policy.train_trans_actor(256, args.additional_ascent, args.additional_bellman)
-                #policy.trans_RB.reset()
+                policy.train_trans_actor(256, args.additional_ascent)
                 tr_avg_reward = eval_transformer(policy, args, 1)
                 experiment.add_scalar('Trans_Eval_reward_1', tr_avg_reward, t)
                 
                 if (tr_avg_reward > max_trans_reward):
                     max_trans_reward = tr_avg_reward
-                    torch.save(policy.trans_actor, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.trans_actor_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    
-                    torch.save(policy.trans_critic, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.trans_critic_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    
-                    torch.save(policy.critic, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth")
-                    torch.save(policy.critic_target, f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth") 
+                    torch.save(policy.trans_actor, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.trans_actor_target, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.critic, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.critic_target, f"ECAI_SAC_CAMERA_READY_WEIGHTS[MDP]/{args.env}-[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth") 
+                
                 
          

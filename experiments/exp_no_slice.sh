@@ -1,6 +1,6 @@
 #!/bin/bash
 
-seed=(1 3 4)
+seed=(1)
 
 for seed in ${seed[@]}
 do

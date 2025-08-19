@@ -274,7 +274,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_envs", default=1, type=int)
     parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--trans_critic", default=False)
-    parser.add_argument("--rb_size", default=500000, type=int)
+    parser.add_argument("--rb_size", default=1000000, type=int)
     parser.add_argument("--separate_trans_critic", default=False)
     parser.add_argument("--start_timesteps", default=0, type=int)# Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=3e3, type=int)       # How often (time steps) we evaluate
@@ -298,12 +298,12 @@ if __name__ == "__main__":
     config['model_config']['actor_mode'] = 'Trans'
     config['train_config']['replay_buffer_size'] = args.rb_size
     
-    if args.env == "HalfCheetah-v4":
-        args.obs_indices = [0,1,2,3,8,9,10,11,12]
-    elif args.env == "Ant-v4":
-        args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]    
-    elif args.env == "Hopper-v4":
-        args.obs_indices = [0,1,2,3,4]    
+    # if args.env == "HalfCheetah-v4":
+    #     args.obs_indices = [0,1,2,3,8,9,10,11,12]
+    # elif args.env == "Ant-v4":
+    #     args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]    
+    # elif args.env == "Hopper-v4":
+    #     args.obs_indices = [0,1,2,3,4]    
     
     n_l = config['model_config']['num_layers']
     d_m = config['model_config']['d_model']
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     
     for RUN in [args.seed]:
         #args.seed = RUN
-        path2run = f"RLC_RUNS/{args.env}/[STAGE2_POMDP_LSTM]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
+        path2run = f"ECAI_REBUTTAL_ST2/{args.env}/[!FROM_SCRATCH!]|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|EvFreq={args.eval_freq}"
     
         experiment = SummaryWriter(log_dir=path2run)
     
@@ -336,12 +336,18 @@ if __name__ == "__main__":
             kwargs["grad_clip"] = args.grad_clip
 
         
-        pth2trans = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
-        pth2trans_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
-        pth2critic = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
-        pth2critic_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        # pth2trans = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        # pth2trans_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]Trans_actor(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        # pth2critic = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
+        # pth2critic_tgt = f"RLC_WEIGHTS/{args.env}/[FINAL_ST1(pomdp)]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|AddBell={args.additional_bellman}|UseTrData={args.use_train_data}|.pth"
         
-        kwargs["preload_weights"] = [pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
+        # pth2trans = f"ECAI_REBUTTAL_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2trans_tgt = f"ECAI_REBUTTAL_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2critic = f"ECAI_REBUTTAL_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2critic_tgt = f"ECAI_REBUTTAL_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        
+        # kwargs["preload_weights"] = [pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
+        kwargs["preload_weights"] = None
         policy = TD3(args.num_envs, 'state', config['train_config']['context_length'], config['model_config'], **kwargs)
         
         second_stage(policy, config, args, experiment)                    

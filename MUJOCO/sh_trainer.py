@@ -29,7 +29,7 @@ def eval_transformer(policy, args, eval_episodes=10):
     
     avg_reward = 0.
 
-    policy.trans.eval()
+    policy.trans_actor.eval()
 
     for _ in range(eval_episodes):
         state = eval_env.reset()
@@ -64,7 +64,7 @@ def eval_transformer(policy, args, eval_episodes=10):
             # elif tr_num == 4:
             #     sampled_action = policy.trans4.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)
             
-            sampled_action = policy.trans.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)                    
+            sampled_action = policy.trans_actor.actor_forward(st_s) if args.obs_mode == 'state' else policy.trans.actor_forward(st_s, img_s)                    
             sampled_action = sampled_action.detach().cpu()
             action = np.clip( sampled_action.numpy()[:,0,], -1, 1)  #action (n_e, a_d)
 
@@ -94,7 +94,7 @@ def eval_transformer(policy, args, eval_episodes=10):
     #     policy.trans3.train()
     # elif tr_num == 4:
     #     policy.trans4.train()
-    policy.trans.train()
+    policy.trans_actor.train()
     
     return avg_reward
 
@@ -162,14 +162,14 @@ if __name__ == "__main__":
     parser.add_argument("--env", default="HalfCheetah-v4")          # OpenAI gym environment name
     parser.add_argument("--obs_indices", default=None) #Cth [0,1,2,3,8,9,10,11,12] | Hppr [0,1,2,3,4] | Ant [0,1,2,3,4,5,6,7,8,9,10,11,12]
     parser.add_argument("--obs_mode", default="state")
-    parser.add_argument("--use_train_data", default=False)
-    parser.add_argument("--additional_ascent", default=False)
+    parser.add_argument("--use_train_data", default=True)
+    parser.add_argument("--additional_ascent", default=None)
     parser.add_argument("--evals_for_trans", default=3)
     parser.add_argument("--num_envs", default=1, type=int)
     parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--trans_critic", default=False)
     parser.add_argument("--separate_trans_critic", default=False)
-    parser.add_argument("--additional_bellman", default=False)
+    parser.add_argument("--additional_bellman", default=None)
     parser.add_argument("--start_timesteps", default=25e3, type=int)# Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=3e3, type=int)       # 2e3
     parser.add_argument("--max_timesteps", default=1e6, type=int)   # Max time steps to run environment
@@ -196,18 +196,18 @@ if __name__ == "__main__":
         
     for RUN in [args.seed]: 
          
-        if args.env == 'HalfCheetah-v4':
-            args.obs_indices = [0,1,2,3,8,9,10,11,12]
-        elif args.env == 'Ant-v4':
-            args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
-        elif args.env == 'Hopper-v4':
-            args.obs_indices = [0,1,2,3,4]
+        # if args.env == 'HalfCheetah-v4':
+        #     args.obs_indices = [0,1,2,3,8,9,10,11,12]
+        # elif args.env == 'Ant-v4':
+        #     args.obs_indices = [0,1,2,3,4,5,6,7,8,9,10,11,12]
+        # elif args.env == 'Hopper-v4':
+        #     args.obs_indices = [0,1,2,3,4]
         
         #path2run = f"Workshop_runs/{args.env}/[FINAL_ST1]|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
 
         #path2run = f"FIG4_RUNS[MDP]/{args.env}/[SMALL_RB_EXP]"
         
-        path2run = f"FIG4_RUNS[FINAL_MLP_POMDP]/{args.env}/seed={args.seed}"
+        path2run = f"ECAI_CAMERA_READY_ST1/{args.env}/seed={args.seed}"
 
 
         experiment = SummaryWriter(log_dir=path2run)
@@ -312,16 +312,16 @@ if __name__ == "__main__":
                 avg_reward = eval_policy(policy, args, args.evals_for_trans)
                 experiment.add_scalar('Eval_reward', avg_reward, t)
                 
-                #policy.train_trans_actor(256, args.additional_ascent)
-                #tr_avg_reward = eval_transformer(policy, args, 1)
-                #experiment.add_scalar('Trans_Eval_reward_1', tr_avg_reward, t)
+                policy.train_trans_actor(256, args.additional_ascent)
+                tr_avg_reward = eval_transformer(policy, args, 1)
+                experiment.add_scalar('Trans_Eval_reward_1', tr_avg_reward, t)
                 
-                # if (tr_avg_reward > max_trans_reward) and (tr_avg_reward > 10):
-                #     max_trans_reward = tr_avg_reward
-                #     torch.save(policy.trans, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                #     torch.save(policy.trans_target, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                #     torch.save(policy.critic, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
-                #     torch.save(policy.critic_target, f"FIG4_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth") 
+                if (tr_avg_reward > max_trans_reward) and (tr_avg_reward > 1000):
+                    max_trans_reward = tr_avg_reward
+                    torch.save(policy.trans_actor, f"ECAI_CAMERA_READY_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.trans_actor_target, f"ECAI_CAMERA_READYL_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.critic, f"ECAI_CAMERA_READY_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+                    torch.save(policy.critic_target, f"ECAI_CAMERA_READY_WEIGHTS[MDP]/{args.env}/[FINAL_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth") 
                 
                 
          

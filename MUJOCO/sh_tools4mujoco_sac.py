@@ -3,9 +3,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Normal
 import sys
 import os
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from RATE_GTrXL.mem_transformer_v2_GTrXL import Model, CustomTransformerEncoder
 from gymnasium import spaces
@@ -16,6 +16,9 @@ import gym
 #import gymnasium as gym
 #import pybullet_envs_gymnasium 
 ##################################
+
+LOG_STD_MIN = -5
+LOG_STD_MAX = 2
 
 def mean_padding(tensor, K):
     if len(tensor.shape) == 3:
@@ -137,213 +140,236 @@ def env_constructor(env_name: str, seed: int = 1, obs_indices: list = None):
 
 
 
-class Actor(nn.Module):
+class GaussianActor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
-        super(Actor, self).__init__()
-
-        self.l1 = nn.Linear(state_dim, 256)
-        self.l2 = nn.Linear(256, 256)
-        self.l2_2 = nn.Linear(256, 256)
-        self.l3 = nn.Linear(256, action_dim)
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+        )
+        self.mean = nn.Linear(256, action_dim)
+        self.log_std = nn.Linear(256, action_dim)
         self.max_action = max_action
-    def forward(self, state):
-        a = F.relu(self.l1(state))
-        a = F.relu(self.l2(a))
-        a = F.relu(self.l2_2(a))
-        return self.max_action * torch.tanh(self.l3(a))
 
+    def forward(self, state, deterministic=False, with_logprob=True):
+        h = self.net(state)
+        mean = self.mean(h)
+        log_std = torch.clamp(self.log_std(h), LOG_STD_MIN, LOG_STD_MAX)
+        std = torch.exp(log_std)
+        if deterministic:
+            z = mean
+        else:
+            eps = torch.randn_like(mean)
+            z = mean + std * eps  # репараметризация
+        action = torch.tanh(z)
+        action = self.max_action * action
+        if not with_logprob:
+            return action
+        # лог-правдоподобие со «squash» поправкой
+        log_prob = Normal(mean, std).log_prob(z) - torch.log(1 - torch.tanh(z).pow(2) + 1e-6)
+        log_prob = log_prob.sum(dim=-1, keepdim=True)
+        return action, log_prob, mean, log_std
 
+# --- Twin Critic (Q1/Q2) ---
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim, obs_mode, conv_lat_dim):
-        super(Critic, self).__init__()
-        self.obs_mode = obs_mode
-        self.conv_lat_dim = conv_lat_dim
-        # Q1 architecture
-        self.l1 = nn.Linear(state_dim + action_dim, 256) if obs_mode == 'state' else nn.Linear(state_dim + conv_lat_dim + action_dim, 256)
-        self.l2 = nn.Linear(256, 256)
-        self.l2_2 = nn.Linear(256, 256)
-        self.l3 = nn.Linear(256, 1)
-        # Q2 architecture
-        self.l4 = nn.Linear(state_dim + action_dim, 256) if obs_mode == 'state' else nn.Linear(state_dim + conv_lat_dim + action_dim, 256)
-        self.l5 = nn.Linear(256, 256)
-        self.l5_2 = nn.Linear(256, 256)
-        self.l6 = nn.Linear(256, 1)
-    def forward(self, state, action, img_state=None):
-
-        sa = torch.cat([state, action], -1)
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = F.relu(self.l2_2(q1))
-        q1 = self.l3(q1)
-
-        q2 = F.relu(self.l4(sa))
-        q2 = F.relu(self.l5(q2))
-        q2 = F.relu(self.l5_2(q2))
-        q2 = self.l6(q2)
-        return q1, q2
-    def Q1(self, state, action, img_state=None):
-        sa = torch.cat([state, action], -1)
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = F.relu(self.l2_2(q1))
-        q1 = self.l3(q1)
-        return q1
-
-class Trans_Critic(nn.Module):
-    def __init__(self, state_dim, action_dim, d_model=256, num_heads=2, num_layers=1):
-        super(Trans_Critic, self).__init__()
-        
-        self.hidden_dim = d_model
-        self.act_encoder = nn.Linear(state_dim, self.hidden_dim)
-        # # Трансформер-энкодер
-        # self.encoder_layer = nn.TransformerEncoderLayer(
-        #     d_model=hidden_dim, nhead=num_heads, dim_feedforward=hidden_dim
-        # )
-        # self.transformer_encoder = nn.TransformerEncoder(
-        #     self.encoder_layer, num_layers=num_layers
-        # )
-        #
-        # 
-        # self.transformer_encoder = CustomTransformerEncoder(d_model, num_heads, 512, 0.05, False, False, False, 'GRU', 'Trans')
-        
-        self.transformer_encoder = nn.LSTM(input_size=d_model, hidden_size=d_model, num_layers=1, batch_first=True)
-        
-        # Полносвязные слои для Q1 и Q2
-        self.fc1 = nn.Linear(d_model + action_dim, d_model)
-        self.fc2 = nn.Linear(d_model, 1)
-
-        self.fc3 = nn.Linear(d_model + action_dim, d_model)
-        self.fc4 = nn.Linear(d_model, 1)
+    def __init__(self, state_dim, action_dim):
+        super().__init__()
+        # Q1
+        self.q1 = nn.Sequential(
+            nn.Linear(state_dim + action_dim, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+        # Q2
+        self.q2 = nn.Sequential(
+            nn.Linear(state_dim + action_dim, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 1)
+        )
 
     def forward(self, state, action):
-        n_e, bs, cont, s_d = state.shape
-        state = state.view(-1, cont, s_d)  # плющим для аттеншена n_e*bs, context, s_d
-        state = self.act_encoder(state)
-        # Применяем трансформер-энкодер
-        transformer_out = self.transformer_encoder(state)  # n_e*bs, context, d_m
-        #transformer_out = transformer_out[:, -1, :]        # n_e*bs, d_m
-        transformer_out = transformer_out[0][:, -1, :]
-        transformer_out = transformer_out.view(n_e, bs, self.hidden_dim)  # n_e, bs, d_m
-        # Q1
-        sa = torch.cat([transformer_out, action], dim=-1)   # n_e, bs, d_m+a_d
-        q1 = F.relu(self.fc1(sa))
-        q1 = self.fc2(q1)
+        sa = torch.cat([state, action], dim=-1)
+        return self.q1(sa), self.q2(sa)
 
-        # Q2
-        q2 = F.relu(self.fc3(sa))
-        q2 = self.fc4(q2)
-
-        return q1, q2
-    
-    
     def Q1(self, state, action):
-        n_e, bs, cont, s_d = state.shape
-        state = state.view(-1, cont, s_d)  # плющим для аттеншена n_e*bs, context, s_d
-        state = self.act_encoder(state)
-        # Применяем трансформер-энкодер
-        transformer_out = self.transformer_encoder(state)  # n_e*bs, context, d_m
-        transformer_out = transformer_out[0][:, -1, :]        # n_e*bs, d_m
-        transformer_out = transformer_out.view(n_e, bs, self.hidden_dim)  # n_e, bs, d_m
-        # Q1
-        sa = torch.cat([transformer_out, action], dim=-1)   # n_e, bs, d_m+a_d
-        q1 = F.relu(self.fc1(sa))
-        q1 = self.fc2(q1)
+        sa = torch.cat([state, action], dim=-1)
+        return self.q1(sa)
 
-        return q1  
+class Trans_Critic(nn.Module):
     
-# class Trans_Critic(nn.Module):
-#     def __init__(self, state_dim, action_dim, d_model=256, num_heads=2, num_layers=1):
-#         super(Trans_Critic, self).__init__()
-#         self.d_model = d_model
-        
-#         self.state_fc = nn.Linear(state_dim, d_model//2)
-#         self.action_fc = nn.Linear(action_dim, d_model//2)
-#         self.transformer_encoder = CustomTransformerEncoder(d_model//2, num_heads, 512, 0.05, False, False, False, 'GRU', 'Trans')
-#         # Q1 and Q2
-#         self.out_fc_1 = nn.Linear(d_model, 1)
-#         self.out_fc_2 = nn.Linear(d_model, 1)
+    def __init__(self, state_dim, action_dim, d_model=256, n_heads=2, num_layers=2, dim_feedforward=512, dropout=0.05,
+                 wo_ffn=False, norm_first=True, use_gate=False, gate_mode='GRU', mode='Trans'):
+        super().__init__()
+        self.d_model = d_model
+        # Проекция признаков состояния в пространство трансформера
+        self.state_fc = nn.Linear(state_dim, d_model)
+        # Стек энкодеров
+        self.enc_layers = nn.ModuleList([
+            CustomTransformerEncoder(d_model, n_heads, dim_feedforward, dropout, wo_ffn, norm_first, use_gate, gate_mode, mode)
+            for _ in range(num_layers)
+        ])
+        # Ветка действия до склейки
+        self.action_fc = nn.Linear(action_dim, d_model)
+        # Две головы Q
+        self.q1 = nn.Sequential(
+            nn.Linear(2*d_model, d_model), nn.ReLU(),
+            nn.Linear(d_model, d_model), nn.ReLU(),
+            nn.Linear(d_model, 1)
+        )
+        self.q2 = nn.Sequential(
+            nn.Linear(2*d_model, d_model), nn.ReLU(),
+            nn.Linear(d_model, d_model), nn.ReLU(),
+            nn.Linear(d_model, 1)
+        )
 
-#     def forward(self, state, action):
-#         n_e, bs, cont, s_d = state.shape
-#         state = state.view(-1, cont, s_d)
-#         state = self.state_fc(state)  # n_e*bs, cont, d_model//2
-        
-#         transformer_out = self.transformer_encoder(state)  # n_e*bs, cont, d_model//2
-#         transformer_out = transformer_out[:, -1, :].view(n_e, bs, self.d_model//2)    # n_e, bs, d_model//2
+    def _encode_state(self, states_seq):
+        # Приводим к (N, T, s_d)
+        reshape = None
+        if states_seq.dim() == 4:
+            n_e, bs, T, s_d = states_seq.shape
+            x = states_seq.view(-1, T, s_d)
+            reshape = (n_e, bs)
+        elif states_seq.dim() == 3:
+            x = states_seq
+        else:
+            raise ValueError(f"states_seq must be (bs,T,s) or (n_e,bs,T,s), got {states_seq.shape}")
+        x = self.state_fc(x)                 # (N, T, d_model)
+        for layer in self.enc_layers:
+            x = layer(x)                     # (N, T, d_model)
+        last = x[:, -1, :]                   # (N, d_model)
+        if reshape is not None:
+            n_e, bs = reshape
+            last = last.view(n_e, bs, -1)
+        return last
 
-#         action = self.action_fc(action)                     # n_e, bs, d_model//2
-#         sa = torch.cat([transformer_out, action], dim=-1)   # n_e, bs, d_model
-        
-#         q1 = self.out_fc_1(sa)
-#         q2 = self.out_fc_2(sa)
-#         return q1, q2
+    def forward(self, states_seq, action):
+        h = self._encode_state(states_seq)
+        a = self.action_fc(action)
+        sa = torch.cat([h, a], dim=-1)
+        return self.q1(sa), self.q2(sa)
 
-#     def Q1(self, state, action):
-#         n_e, bs, cont, s_d = state.shape
-#         state = state.view(-1, cont, s_d)
-#         state = self.state_fc(state)  # n_e*bs, cont, d_model//2
-        
-#         transformer_out = self.transformer_encoder(state)  # n_e*bs, cont, d_model//2
-#         transformer_out = transformer_out[:, -1, :].view(n_e, bs, self.d_model//2)    # n_e, bs, d_model//2
+    def Q1(self, states_seq, action):
+        h = self._encode_state(states_seq)
+        a = self.action_fc(action)
+        sa = torch.cat([h, a], dim=-1)
+        return self.q1(sa)
+    
+class Trans_Actor(nn.Module):
+    """Актор на базе CustomTransformerEncoder: кодирует последовательность состояний,
+    берёт последний токен и предсказывает параметры гауссовского распределения действий."""
+    def __init__(self, state_dim, action_dim, max_action, d_model=256, n_heads=2, num_layers=2, dim_feedforward=512, dropout=0.05,
+                 log_std_min=LOG_STD_MIN, log_std_max=LOG_STD_MAX, wo_ffn=False, norm_first=True, use_gate=False, gate_mode='GRU', mode='Trans'):
+        super().__init__()
+        self.max_action = max_action
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
 
-#         action = self.action_fc(action)                     # n_e, bs, d_model//2
-#         sa = torch.cat([transformer_out, action], dim=-1)   # n_e, bs, d_model
-        
-#         q1 = self.out_fc_1(sa)
-#         return q1
+        self.state_fc = nn.Linear(state_dim, d_model)
+        self.enc_layers = nn.ModuleList([
+            CustomTransformerEncoder(d_model, n_heads, dim_feedforward, dropout, wo_ffn, norm_first, use_gate, gate_mode, mode)
+            for _ in range(num_layers)
+        ])
+        self.head = nn.Sequential(
+            nn.Linear(d_model, d_model), nn.ReLU(),
+            nn.Linear(d_model, d_model), nn.ReLU(),
+        )
+        self.mean = nn.Linear(d_model, action_dim)
+        self.log_std = nn.Linear(d_model, action_dim)
 
-class TD3(object):
+    def _encode_state(self, states_seq):
+        reshape = None
+        if states_seq.dim() == 4:
+            n_e, bs, T, s_d = states_seq.shape
+            x = states_seq.view(-1, T, s_d)
+            reshape = (n_e, bs)
+        elif states_seq.dim() == 3:
+            x = states_seq
+        else:
+            raise ValueError(f"states_seq must be (bs,T,s) or (n_e,bs,T,s), got {states_seq.shape}")
+
+        x = self.state_fc(x)
+        for layer in self.enc_layers:
+            x = layer(x)
+        last = x[:, -1, :]  # (n_e*bs, d_model) или (bs, d_model)
+
+        if reshape is not None:
+            n_e, bs = reshape
+            d = last.size(-1)
+            if last.numel() == 0:
+                # Вернуть корректный пустой тензор нужной формы
+                return last.new_empty(n_e, bs, d)
+            last = last.contiguous().view(n_e, bs, d)
+        return last
+
+    def forward(self, states_seq, deterministic=False, with_logprob=True):
+        h = self._encode_state(states_seq)
+        h = self.head(h)
+        mean = self.mean(h)
+        log_std = torch.clamp(self.log_std(h), self.log_std_min, self.log_std_max)
+        std = torch.exp(log_std)
+        if deterministic:
+            z = mean
+        else:
+            z = mean + std * torch.randn_like(mean)
+        action = torch.tanh(z) * self.max_action
+        if not with_logprob:
+            return action
+        # squash correction
+        log_prob = Normal(mean, std).log_prob(z) - torch.log(1 - torch.tanh(z).pow(2) + 1e-6)
+        log_prob = log_prob.sum(dim=-1, keepdim=True)
+        return action, log_prob, mean, log_std
+
+class SAC(object):
     def __init__(
         self,
         num_envs,
         obs_mode,
         context_length,
-        model_config,
+        model_config,  # передаётся для трансформера
         state_dim,
         action_dim,
         max_action,
-        discount,
-        tau,
-        policy_noise,
-        noise_clip,
-        policy_freq,
-        grad_clip,
-        preload_weights=None
-):
-
+        discount=0.99,
+        tau=0.005,
+        alpha=None,              # если None – автотюнинг
+        target_entropy=None,     # если None -> -action_dim
+        actor_lr=3e-4,
+        critic_lr=1e-3,
+        alpha_lr=3e-4,
+        grad_clip=1e9,
+        preload_weights=None,
+    ):
+        self.num_envs = num_envs
+        self.obs_mode = obs_mode
         self.context_length = context_length
-        
-        if preload_weights==None:
-            self.actor = Actor(state_dim, action_dim, max_action).to(device)
-            self.actor_target = copy.deepcopy(self.actor).to(device)
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
+        self.discount = discount
+        self.tau = tau
+        self.max_action = max_action
+        self.grad_clip = grad_clip
 
-            self.critic = Critic(state_dim, action_dim, obs_mode, model_config['conv_lat_dim']).to(device)
+        if preload_weights == None:
+            # MLP-ветка
+            self.actor = GaussianActor(state_dim, action_dim, max_action).to(device)
+            self.critic = Critic(state_dim, action_dim).to(device)
             self.critic_target = copy.deepcopy(self.critic).to(device)
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
-            
-            
-            #self.actor = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)
-            #self.actor_target = copy.deepcopy(self.actor).to(device)
-            #self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
-            
-            #self.critic = Trans_Critic(state_dim=state_dim, action_dim=action_dim, d_model=256, num_heads=2, num_layers=1).to(device)
-            #self.critic_target = copy.deepcopy(self.critic).to(device)
-            #self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
-            
-            
-            self.trans_actor = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)
-            self.trans_actor_target = copy.deepcopy(self.trans_actor).to(device)
-            self.trans_actor_optimizer = torch.optim.Adam(self.trans_actor.parameters(), lr=3e-4)
-            self.trans_RB = Trans_RB(num_envs, 30000, context_length, state_dim, action_dim) 
-            
-            self.trans_critic = Trans_Critic(state_dim=state_dim, action_dim=action_dim, d_model=256, num_heads=2, num_layers=1).to(device)
-            self.trans_critic_target = copy.deepcopy(self.trans_critic).to(device)
-            self.trans_critic_optimizer = torch.optim.Adam(self.trans_critic.parameters(), lr=3e-4)
+            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
+            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
 
-            
-        
-        elif preload_weights != None:
+            # Trans-ветка (требует ваш backbone Model + адаптер)
+            #from RATE_GTrXL.mem_transformer_v2_GTrXL import Model  # как у вас в исходнике
+            #self.trans_backbone = Model(**model_config, state_dim=state_dim, act_dim=action_dim, obs_mode=obs_mode).to(device)
+            self.trans_actor = Trans_Actor(state_dim, action_dim, max_action).to(device)
+            self.trans_actor_target = copy.deepcopy(self.trans_actor).to(device)
+            self.trans_actor_optimizer = torch.optim.Adam(self.trans_actor.parameters(), lr=actor_lr)
+
+            self.trans_RB = Trans_RB(num_envs, 30000, context_length, state_dim, action_dim)
+            self.trans_critic = Trans_Critic(state_dim, action_dim, d_model=256).to(device)
+            self.trans_critic_target = copy.deepcopy(self.trans_critic).to(device)
+            self.trans_critic_optimizer = torch.optim.Adam(self.trans_critic.parameters(), lr=critic_lr)
+        else:
             print('Found preload weights!')
             print('***DOWNLOADING WEIGHTS***')
             p2tr = preload_weights[0]
@@ -355,175 +381,114 @@ class TD3(object):
             self.trans_actor_target = torch.load(p2tr_tgt).to(device)
             self.trans_actor_optimizer = torch.optim.Adam(self.trans_actor.parameters(), lr=3e-4)
             
-            # self.trans_critic = torch.load(p2cr).to(device)
-            # self.trans_critic_target = torch.load(p2cr_tgt).to(device)
-            # self.trans_critic_optimizer = torch.optim.Adam(self.trans_critic.parameters(), lr=3e-4)
+            self.trans_critic = torch.load(p2cr).to(device)
+            self.trans_critic_target = torch.load(p2cr_tgt).to(device)
+            self.trans_critic_optimizer = torch.optim.Adam(self.trans_critic.parameters(), lr=3e-4)
         
+        
+        # Температура (энтропия)
+        self.target_entropy = -float(action_dim) if target_entropy is None else target_entropy
+        if alpha is None:
+            self.log_alpha = torch.zeros(1, requires_grad=True, device=device)
+            self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
+            self._fixed_alpha = None
+        else:
+            self.log_alpha = None
+            self._fixed_alpha = torch.tensor([alpha], device=device)
 
-
-
-        self.max_action = max_action
-        self.discount = discount
-        self.tau = tau
-        self.policy_noise = policy_noise
-        self.noise_clip = noise_clip
-        self.policy_freq = policy_freq
-        self.context_length = context_length
-        self.obs_mode = obs_mode
         self.total_it = 0
         self.eval_counter = 0
-        self.trans_critic_mode = model_config['critic_mode']
-        self.grad_clip = grad_clip
-        
 
-    def select_action(self, state): # state Tens(1, s_d)
-        return self.actor(state).cpu().data.numpy()
-    
-    def stage_2_train(self, batch_size):
-        '''
-        Function for transformer training on the second stage
-        '''
-        self.total_it += 1
-        train_batch = self.new_trans_RB.sample(batch_size)
-        if self.obs_mode == 'state':
-            states, actions, rewards, dones, next_states = train_batch
-        else:
-            states, actions, rewards, dones, next_states, img_states, img_next_states = train_batch 
-            img_states, img_next_states = img_states.to(device).requires_grad_(True), img_next_states.to(device).requires_grad_(True)	
-        
-        states = states.to(device).requires_grad_(True)											#n_e, bs, context, state_dim
-        actions = actions.to(device).requires_grad_(True)										#n_e, bs, action_dim
-        rewards = rewards.to(device).requires_grad_(True)										#n_e, bs, 1
-        dones = dones.to(device)											                    #n_e, bs, 1
-        next_states = next_states.to(device).requires_grad_(True)								#n_e, bs, context, state_dim
+    # --------- API ---------
+    @property
+    def alpha(self):
+        if self._fixed_alpha is not None:
+            return self._fixed_alpha
+        return self.log_alpha.exp()
 
-        self.trans_actor.train()
-        if hasattr(self, 'critic'):
-            self.critic.train()
-        else:
-            self.trans_critic.train()    
+    @torch.no_grad()
+    def select_action(self, state, deterministic=True):
+        # state: (n_e, s_d)
+        a = self.actor(state, deterministic=deterministic, with_logprob=False)
+        return a.cpu().numpy()
 
-        with torch.no_grad():
-            noise = (                                                           #n_e, bs, a_d
-                torch.randn_like(actions) * self.policy_noise  
-            ).clamp(-self.noise_clip, self.noise_clip)
-            
-            if self.obs_mode == 'state':
-                next_action = (
-                    self.trans_actor_target.actor_forward(next_states) + noise  			 #next_action = (n_e, bs, a_d)
-                ).clamp(-self.max_action, self.max_action)
-            else:
-                next_action = self.trans_actor_target.actor_forward(next_states, img_next_states)
-                noise = ( torch.randn_like(next_action) * self.policy_noise ).clamp(-self.noise_clip, self.noise_clip)  
-                next_action = (next_action + noise).clamp(-self.max_action, self.max_action)
-            
-            if hasattr(self, 'critic_target'): 
-                target_Q1, target_Q2 = self.critic_target(next_states[:,:,-1,:], next_action) if self.obs_mode == 'state' else self.critic_target(next_states[:,:,-1,:], next_action, img_next_states[:,:,-1,])
-            else:
-                target_Q1, target_Q2 = self.trans_critic_target(next_states, next_action)
-            
-            target_Q = torch.min(target_Q1, target_Q2)                                      #target_Q = (n_e, bs, 1)
-            target_Q = rewards + (1-dones) * self.discount * target_Q       #target_Q = (n_e, bs, 1) + (n_e, bs, 1) * const * (n_e, bs, 1)
-        
-        if hasattr(self, 'critic'):
-            current_Q1, current_Q2 = self.critic(states[:,:,-1,:], actions) if self.obs_mode == 'state' else self.critic(states[:,:,-1,:], actions, img_states[:,:,-1,])  #current_Q1 = (n_e, bs, 1)
-        else:
-            current_Q1, current_Q2 = self.trans_critic(states, actions)
-
-
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-        self.experiment.add_scalar('Critic_loss', critic_loss.item(), self.total_it)
-
-        if hasattr(self, 'critic'):
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.grad_clip)
-            critic_grad_norm = sum(p.grad.norm().item() for p in self.critic.parameters() if p.grad is not None)
-        else:
-            self.trans_critic_optimizer.zero_grad()
-            critic_loss.backward()
-            torch.nn.utils.clip_grad_value_(self.trans_critic.parameters(), self.grad_clip)
-            critic_grad_norm = sum(p.grad.norm().item() for p in self.trans_critic.parameters() if p.grad is not None)
-
-        
-        self.experiment.add_scalar('critic_grad_norm', critic_grad_norm, self.total_it)
-        
-        if hasattr(self, 'critic'):
-            self.critic_optimizer.step()
-        else:
-            self.trans_critic_optimizer.step()
-
-        # Delayed policy updates
-        if self.total_it % self.policy_freq == 0:
-
-            # Compute actor losse
-            if hasattr(self, 'critic'):
-                trans_loss = -self.critic.Q1(states[:,:,-1,:], self.trans_actor.actor_forward(states)).mean()
-            else:
-                trans_loss = -self.trans_critic.Q1(states, self.trans_actor.actor_forward(states)).mean()    
-            
-            self.experiment.add_scalar('Actor_loss', trans_loss, self.total_it)
-            
-            # Optimize the actor 
-            self.trans_actor_optimizer.zero_grad()
-            trans_loss.backward()
-            torch.nn.utils.clip_grad_value_(self.trans_actor.parameters(), self.grad_clip)
-            trans_grad_norm = sum(p.grad.norm().item() for p in self.trans_actor.parameters() if p.grad is not None)
-            self.experiment.add_scalar('actor_grad_norm', trans_grad_norm, self.total_it)
-            self.trans_actor_optimizer.step()
-            
-            if hasattr(self, 'critic'):
-                for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-            else:
-                for param, target_param in zip(self.trans_critic.parameters(), self.trans_critic_target.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)        
-
-            for param, target_param in zip(self.trans_actor.parameters(), self.trans_actor_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-
+    # --------- MLP SAC update ---------
     def train(self, replay_buffer, batch_size=256):
         self.total_it += 1
-
         state, action, next_state, reward, not_done = replay_buffer.sample(batch_size)
+        # next action & log prob
         with torch.no_grad():
-            noise = (
-                torch.randn_like(action) * self.policy_noise        #noise = (n_e, b_s, a_d)
-            ).clamp(-self.noise_clip, self.noise_clip)
-            
-            next_action = (
-                self.actor_target(next_state) + noise               #next_action = (n_e, b_s, a_d)
-            ).clamp(-self.max_action, self.max_action)
-
-            target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-            target_Q = torch.min(target_Q1, target_Q2)                          #target_Q = (n_e, b_s, 1)
-            target_Q = reward + not_done * self.discount * target_Q             #target_Q = (n_e, b_s, 1) + (n_e, b_s, 1) * const * (n_e, b_s, 1)
-
-        current_Q1, current_Q2 = self.critic(state, action)                     #current_Q1(and Q2) = (n_e, b_s, 1)
-
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q) #успешно сплюснул в константу
-
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
+            next_action, next_logp, _, _ = self.actor(next_state, deterministic=False, with_logprob=True)
+            target_q1, target_q2 = self.critic_target(next_state, next_action)
+            target_v = torch.min(target_q1, target_q2) - self.alpha * next_logp
+            target_q = reward + not_done * self.discount * target_v
+        # critic
+        cur_q1, cur_q2 = self.critic(state, action)
+        critic_loss = F.mse_loss(cur_q1, target_q) + F.mse_loss(cur_q2, target_q)
+        self.critic_optimizer.zero_grad(); critic_loss.backward()
+        torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.grad_clip)
         self.critic_optimizer.step()
+        # actor
+        new_action, logp, _, _ = self.actor(state, deterministic=False, with_logprob=True)
+        q1_pi = self.critic.Q1(state, new_action)
+        actor_loss = (self.alpha * logp - q1_pi).mean()
+        self.actor_optimizer.zero_grad(); actor_loss.backward()
+        torch.nn.utils.clip_grad_value_(self.actor.parameters(), self.grad_clip)
+        self.actor_optimizer.step()
+        # alpha (autotune)
+        if self.log_alpha is not None:
+            alpha_loss = (self.alpha * (-logp - self.target_entropy).detach()).mean()
+            self.alpha_optimizer.zero_grad(); alpha_loss.backward(); self.alpha_optimizer.step()
+        # soft update
+        for p, tp in zip(self.critic.parameters(), self.critic_target.parameters()):
+            tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
-        if self.total_it % self.policy_freq == 0:
+    # --------- Transformer SAC (stage 2) ---------
+    def stage_2_train(self, batch_size):
+        
+        self.total_it += 1
+        batch = self.new_trans_RB.sample(batch_size) if hasattr(self, 'new_trans_RB') else self.trans_RB.sample(torch.randperm(self.trans_RB.idx))
+        if self.obs_mode == 'state':
+            states, actions, rewards, dones, next_states = batch
+            img_states = img_next_states = None
+        else:
+            states, actions, rewards, dones, next_states, img_states, img_next_states = batch
+        states = states.to(device)
+        next_states = next_states.to(device)
+        actions = actions.to(device)
+        rewards = rewards.to(device)
+        not_dones = (1 - dones).to(device)
 
-            actor_loss = -self.critic.Q1(state, self.actor(state)).mean()    #state=(n_e,b_s,s_d), actor(state)=(n_e,b_s,a_d), actor_loss=(n_e,b_s,1)
+        # --- Critic update ---
+        with torch.no_grad():
+            na, nlogp, _, _ = self.trans_actor(next_states, deterministic=False, with_logprob=True)
+            tq1, tq2 = self.trans_critic_target(next_states[:,:,-1,:], na)
+            tv = torch.min(tq1, tq2) - self.alpha * nlogp
+            target_q = rewards + not_dones * self.discount * tv
+        cq1, cq2 = self.trans_critic(states[:,:,-1,:], actions)
+        critic_loss = F.mse_loss(cq1, target_q) + F.mse_loss(cq2, target_q)
+        self.trans_critic_optimizer.zero_grad(); critic_loss.backward()
+        torch.nn.utils.clip_grad_value_(self.trans_critic.parameters(), self.grad_clip)
+        self.trans_critic_optimizer.step()
 
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
-            
-            self.critic_optimizer.zero_grad()#############################
+        # --- Actor update ---
+        pa, logp, _, _ = self.trans_actor(states, deterministic=False, with_logprob=True)
+        q1_pi = self.trans_critic.Q1(states[:,:,-1,:], pa)
+        actor_loss = (self.alpha * logp - q1_pi).mean()
+        self.trans_actor_optimizer.zero_grad(); actor_loss.backward()
+        torch.nn.utils.clip_grad_value_(self.trans_actor.parameters(), self.grad_clip)
+        self.trans_actor_optimizer.step()
 
-            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        # --- Alpha ---
+        if self.log_alpha is not None:
+            alpha_loss = (self.alpha * (-logp - self.target_entropy).detach()).mean()
+            self.alpha_optimizer.zero_grad(); alpha_loss.backward(); self.alpha_optimizer.step()
 
-            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
+        # --- Soft updates ---
+        for p, tp in zip(self.trans_critic.parameters(), self.trans_critic_target.parameters()):
+            tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
+        for p, tp in zip(self.trans_actor.parameters(), self.trans_actor_target.parameters()):
+            tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
         
         
@@ -544,7 +509,7 @@ class TD3(object):
             rewards = batch[3]      # n_e, b_s, 1
             not_dones = batch[4]    # n_e, b_s, 1
             
-            preds = self.trans_actor.actor_forward(states)
+            preds = self.trans_actor(states, deterministic=True, with_logprob=False)
             bc_loss = nn.MSELoss()(preds, targets)
             self.trans_actor_optimizer.zero_grad()
             bc_losses.append(bc_loss.item())
@@ -567,7 +532,7 @@ class TD3(object):
                 #                 ).clamp(-self.noise_clip, self.noise_clip)
                         
                 #         if additional_bellman == 'Trans': # means that target value is generated by Trans 
-                #             next_action = (self.trans_actor_target.actor_forward(next_states) + noise  			 #next_action = (n_e, bs, a_d)
+                #             next_action = (self.trans_actor_target(next_states) + noise  			 #next_action = (n_e, bs, a_d)
                 #                     ).clamp(-self.max_action, self.max_action)
                 #             target_Q1, target_Q2 = self.trans_critic_target(next_states, next_action)
                         
@@ -594,9 +559,9 @@ class TD3(object):
                 
             if additional_ascent is not None:
                 if additional_ascent == 'Trans':      
-                    ascent_loss = -self.trans_critic.Q1( states, self.trans_actor.actor_forward(states) ).mean()
+                    ascent_loss = -self.trans_critic.Q1( states, self.trans_actor(states, deterministic=True, with_logprob=False) ).mean()
                 elif additional_ascent == 'MLP':
-                    ascent_loss = -self.critic.Q1( states[:,:,-1,], self.trans_actor.actor_forward(states) ).mean()
+                    ascent_loss = -self.critic.Q1( states[:,:,-1,], self.trans_actor(states, deterministic=True, with_logprob=False) ).mean()
                 ascent_losses.append(ascent_loss.cpu().detach().numpy())
                 self.trans_actor_optimizer.zero_grad()
                 ascent_loss.backward()
@@ -655,10 +620,10 @@ class TD3(object):
             states = batch[0]
             targets = batch[2]
             
-            preds1 = self.trans1.actor_forward(states)
-            preds2 = self.trans2.actor_forward(states)
-            preds3 = self.trans3.actor_forward(states)
-            preds4 = self.trans4.actor_forward(states)
+            preds1 = self.trans1(states)
+            preds2 = self.trans2(states)
+            preds3 = self.trans3(states)
+            preds4 = self.trans4(states)
             
             loss1 = nn.MSELoss()(preds1, targets)
             loss2 = nn.MSELoss()(preds2, targets)
@@ -686,8 +651,8 @@ class TD3(object):
             self.trans4_actor_optimizer.step()
             
             # GRADIENT ASCENT
-            trans_loss1 = -self.critic.Q1(states[:,:,-1,:], self.trans1.actor_forward(states)).mean()
-            trans_loss3 = -self.critic.Q1(states[:,:,-1,:], self.trans3.actor_forward(states)).mean()
+            trans_loss1 = -self.critic.Q1(states[:,:,-1,:], self.trans1(states)).mean()
+            trans_loss3 = -self.critic.Q1(states[:,:,-1,:], self.trans3(states)).mean()
             
             ascent_losses1.append(trans_loss1.cpu().detach().numpy())
             ascent_losses3.append(trans_loss3.cpu().detach().numpy())
@@ -792,16 +757,16 @@ class TD3(object):
                     ).clamp(-self.noise_clip, self.noise_clip)
                     
                     next_actions1 = (
-                        self.trans_target1.actor_forward(next_states) + noise               #next_action = (n_e, b_s, a_d)
+                        self.trans_target1(next_states) + noise               #next_action = (n_e, b_s, a_d)
                     ).clamp(-self.max_action, self.max_action)
                     next_actions2 = (
-                        self.trans_target2.actor_forward(next_states) + noise               #next_action = (n_e, b_s, a_d)
+                        self.trans_target2(next_states) + noise               #next_action = (n_e, b_s, a_d)
                     ).clamp(-self.max_action, self.max_action)
                     next_actions3 = (
-                        self.trans_target3.actor_forward(next_states) + noise               #next_action = (n_e, b_s, a_d)
+                        self.trans_target3(next_states) + noise               #next_action = (n_e, b_s, a_d)
                     ).clamp(-self.max_action, self.max_action)
                     next_actions4 = (
-                        self.trans_target4.actor_forward(next_states) + noise               #next_action = (n_e, b_s, a_d)
+                        self.trans_target4(next_states) + noise               #next_action = (n_e, b_s, a_d)
                     ).clamp(-self.max_action, self.max_action)
                     
                     # Compute the target Q value

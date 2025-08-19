@@ -179,7 +179,7 @@ def second_stage(policy, config, args, experiment):
             
             
             
-    torch.save(policy.trans, f"WORKSHOP_WEIGHTS/{args.env}/[+NO_PAD+][NEW_ST_ST2]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
+    torch.save(policy.trans, f"[+NO_PAD+][NEW_ST_ST2]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth")
 
 
 if __name__ == "__main__":
@@ -193,7 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--policy", default="TD3")                  # Policy name (TD3, DDPG or OurDDPG)
     parser.add_argument("--env", default="PushCube-v1")          # OpenAI gym environment name
     parser.add_argument("--num_envs", default=15, type=int)
-    parser.add_argument("--seed", default=3, type=int)
+    parser.add_argument("--seed", default=2, type=int)
     parser.add_argument("--use_train_data", default=True, type=bool)       #|False|  |True|  |False|  |True|
     parser.add_argument("--additional_ascent", default=False, type=bool)    #|False|  |False| |True|   |True|
     parser.add_argument("--start_timesteps", default=0, type=int)# 2e3
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     
     for seed in [args.seed]:
         args.seed = seed
-        path2run = f"WORKSHOP_RUNS/{args.env}/[NO_PAD]|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
+        path2run = f"ECAI_REBUTTAL_ST2/{args.env}/|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|"
     
         experiment = SummaryWriter(log_dir=path2run)
     
@@ -238,10 +238,11 @@ if __name__ == "__main__":
     
         ######### ↓↓↓↓↓ DOWNLOADING WEIGHTS ↓↓↓↓↓ ######### 
     
-        #pth2trans = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
-        #pth2trans_tgt = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
-        #pth2critic = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
-        #pth2critic_tgt = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2trans = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]Trans|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2trans_tgt = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]Trans(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2critic = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]St_Critic|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        # pth2critic_tgt = f"WORKSHOP_WEIGHTS/{args.env}/[NEW_ST_ST1]St_Critic(t)|seed={args.seed}|AddAsc={args.additional_ascent}|UseTrData={args.use_train_data}|.pth"
+        
         
         kwargs["preload_weights"] = None #[pth2trans, pth2trans_tgt, pth2critic, pth2critic_tgt]
         policy = TD3(args.num_envs, 'state', config['train_config']['context_length'], config['model_config'], **kwargs)
