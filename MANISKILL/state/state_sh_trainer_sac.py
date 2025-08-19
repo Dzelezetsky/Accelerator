@@ -36,7 +36,7 @@ def eval_transformer(policy, args, eval_episodes=1):
     avg_reward = 0.
     avg_sr_end = 0.
     avg_sr_once= 0.
-    policy.trans.eval()
+    policy.trans_actor.eval()
 
     for ep in range(eval_episodes):
         
@@ -75,7 +75,7 @@ def eval_transformer(policy, args, eval_episodes=1):
     print(f"seed|{args.seed}|Transformer evaluation over {eval_episodes} episodes: {avg_reward:.3f} ||| {avg_sr_end:.3f} ||| {avg_sr_once:.3f}")
     print("---------------------------------------")
     
-    policy.trans.train()
+    policy.trans_actor.train()
     
     return avg_reward, avg_sr_end, avg_sr_once
 
@@ -149,9 +149,9 @@ if __name__ == "__main__":
     parser.add_argument("--load_model", default="")
     args = parser.parse_args()
 
-    file_name = f"{args.policy}_{args.env}_{args.seed}"
+    #file_name = f"{args.policy}_{args.env}_{args.seed}"
     print("---------------------------------------")
-    print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
+    print(f"Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
 
     
@@ -267,7 +267,7 @@ if __name__ == "__main__":
                     
                 if avg_reward > args.start_trans_train:
                     args.eval_freq = 200
-                    policy.train_trans(policy, 256, experiment, additional_ascent=args.additional_ascent) #256
+                    policy.train_trans_actor(batch_size=256, additional_ascent=args.additional_ascent) #256
                     
                     
                     if tr_avg_reward > max_trans_reward:
