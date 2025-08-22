@@ -136,7 +136,7 @@ if __name__ == "__main__":
     parser.add_argument("--env", default="PushCube-v1")
     parser.add_argument("--num_envs", default=50, type=int)
     parser.add_argument("--seed", default=2, type=int)
-    parser.add_argument("--use_train_data", default=True, type=bool)
+    parser.add_argument("--use_train_data", default=False, type=bool)
     parser.add_argument("--additional_ascent", default=False, type=bool)  
     parser.add_argument("--start_trans_train", default=0, type=int)
     parser.add_argument("--start_timesteps", default=500, type=int)
